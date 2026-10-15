@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from unittest.mock import patch
 from gateway.session_context import set_session_vars, clear_session_vars
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, profile_name_for_home
 from agent.vault_backends import unlock
 from tools import browser_vault_tool  # native registry registration, as at runtime
 from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
@@ -20,7 +20,7 @@ class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.tokens = set_session_vars(platform='photon', chat_type='dm', chat_id='synthetic-chat',
             user_id='synthetic-owner', session_key='synthetic-key', session_id='synthetic-session',
-            profile='default', cron_session='')
+            profile=profile_name_for_home(get_hermes_home()) or '', cron_session='')
         self.service = Service('https://example.invalid', str(get_hermes_home()), port=0)
         self.ctx = PluginContext(PluginManifest(name='synthetic-bridge'), get_plugin_manager())
         self.sent = []
@@ -40,7 +40,7 @@ class BridgeTests(unittest.TestCase):
         clear_session_vars(self.tokens)
 
     def call(self, fn, args=None, **context):
-        return run_tool_execution_middleware('browser_vault_enter_code', args or {},
+        return run_tool_execution_middleware('browser_vault', {'action': 'enter_code', **(args or {})},
             lambda a: fn(a), session_id=context.pop('session_id', 'synthetic-session'), **context)
 
     def worker(self, fn):
@@ -93,7 +93,7 @@ class BridgeTests(unittest.TestCase):
         supervisor = SimpleNamespace(focus_page=lambda *a, **k: {'ok': True, 'url': 'https://synthetic.example/two-factor'},
                                      evaluate_runtime=evaluate)
         with patch.object(SUPERVISOR_REGISTRY, 'get', return_value=supervisor):
-            t, results, errors = self.worker(lambda: self.call(lambda a: self.ctx.dispatch_tool('browser_vault_enter_code', a, task_id='synthetic-session')))
+            t, results, errors = self.worker(lambda: self.call(lambda a: self.ctx.dispatch_tool('browser_vault', a, task_id='synthetic-session')))
             token, page = self.post(synthetic)
             t.join(5)
         self.assertFalse(t.is_alive())
@@ -145,7 +145,7 @@ class BridgeTests(unittest.TestCase):
             return {'ok': True, 'result': '[]' if 'querySelectorAll' in expr else 'https://synthetic.example/passkey'}
         supervisor = SimpleNamespace(focus_page=lambda *a, **k: {'ok': True}, evaluate_runtime=evaluate)
         with patch.object(SUPERVISOR_REGISTRY, 'get', return_value=supervisor):
-            result = json.loads(self.call(lambda a: self.ctx.dispatch_tool('browser_vault_enter_code', a, task_id='synthetic-session')))
+            result = json.loads(self.call(lambda a: self.ctx.dispatch_tool('browser_vault', a, task_id='synthetic-session')))
         self.assertEqual(result['error_type'], 'no_code_field')
         self.assertFalse(self.sent)
         self.assertIsNone(self.service.server)
@@ -161,7 +161,7 @@ class BridgeTests(unittest.TestCase):
         with delegated_child_context(): denied()
         for changes in ({'cron_session':'1'}, {'chat_type':'group'}, {'platform':'api_server'}, {'user_id':''}, {'session_id':''}):
             values = dict(platform='photon', chat_type='dm', chat_id='synthetic-chat', user_id='synthetic-owner',
-                session_key='synthetic-key', session_id='synthetic-session', profile='default', cron_session='')
+                session_key='synthetic-key', session_id='synthetic-session', profile=profile_name_for_home(get_hermes_home()) or '', cron_session='')
             values.update(changes)
             contextvars.copy_context().run(lambda: (set_session_vars(**values), denied()))
         import os
@@ -256,9 +256,9 @@ class BridgeTests(unittest.TestCase):
         from types import SimpleNamespace
         backend = SimpleNamespace(name='bitwarden', display_name='Bitwarden', needs_unlock=True, is_unlocked=lambda: False)
         with patch('agent.vault_backends.enabled_backends', return_value=[backend]):
-            raw = run_tool_execution_middleware('browser_vault_list', {},
-                lambda a: self.ctx.dispatch_tool('browser_vault_list', a), session_id='synthetic-session')
-        self.assertEqual(json.loads(raw)['locked'][0]['unlock'], 'browser_vault_unlock')
+            raw = run_tool_execution_middleware('browser_vault', {'action':'list'},
+                lambda a: self.ctx.dispatch_tool('browser_vault', a), session_id='synthetic-session')
+        self.assertEqual(json.loads(raw)['locked'][0]['unlock'], 'browser_vault action=unlock')
         self.assertFalse(self.sent)
         self.assertIsNone(unlock.get_unlock_prompt_callback())
 
@@ -364,6 +364,14 @@ class BridgeTests(unittest.TestCase):
             return SimpleNamespace(success=True, message_id='synthetic-message-id')
         runner, adapter = SimpleNamespace(_gateway_loop=loop), SimpleNamespace(send=send)
         platform = sender._platform_enum('photon')[0]
+        # The new relay egress guard imports the live gateway reference. Provide
+        # an actual synthetic native adapter there; never import gateway.run's
+        # launcher, which may relaunch this test process into the selected env.
+        import sys
+        from types import ModuleType
+        gateway_run = ModuleType('gateway.run')
+        runner.adapters = {platform: adapter}
+        gateway_run._gateway_runner_ref = lambda: runner
         dispatched = []
         def dispatch(name, args):
             from secure_entry.native import dispatch_message
@@ -375,7 +383,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(unlock.get_code_prompt_callback()('synthetic.example', ''), 'SYNTHETIC-TRANSPORT-CODE')
             return json.dumps({'success':True})
         try:
-            with patch.object(sender, '_resolve_tool_target', return_value=('photon', 'synthetic-chat', None, None)), patch('gateway.config.load_gateway_config', return_value=SimpleNamespace()), patch.object(sender, '_resolve_platform_config', return_value=(platform, SimpleNamespace(token=None), None, None)), patch.object(sender, '_live_adapter', return_value=(runner, adapter)), patch.object(sender, '_mirror_sent_message', return_value=False):
+            with patch.dict(sys.modules, {'gateway.run': gateway_run}), patch.object(sender, '_resolve_tool_target', return_value=('photon', 'synthetic-chat', None, None)), patch('gateway.config.load_gateway_config', return_value=SimpleNamespace()), patch.object(sender, '_resolve_platform_config', return_value=(platform, SimpleNamespace(token=None), None, None)), patch.object(sender, '_live_adapter', return_value=(runner, adapter)), patch.object(sender, '_mirror_sent_message', return_value=False):
                 t, results, errors = self.worker(lambda: self.call(consumer))
                 self.assertTrue(self.delivered.wait(8), str(dispatched) + str(results) + str(errors))
                 self.assertTrue(t.is_alive())
@@ -485,8 +493,8 @@ class BridgeTests(unittest.TestCase):
         backend = SimpleNamespace(name='bitwarden', display_name='Bitwarden', needs_unlock=True,
                                   is_unlocked=lambda: False, unlock=native_unlock)
         with patch('agent.vault_backends.enabled_backends', return_value=[backend]):
-            t, results, errors = self.worker(lambda: run_tool_execution_middleware('browser_vault_unlock', {'backend':'bitwarden'},
-                lambda a: self.ctx.dispatch_tool('browser_vault_unlock', a), session_id='synthetic-session'))
+            t, results, errors = self.worker(lambda: run_tool_execution_middleware('browser_vault', {'action':'unlock', 'backend':'bitwarden'},
+                lambda a: self.ctx.dispatch_tool('browser_vault', a), session_id='synthetic-session'))
             token, page = self.post(synthetic, field='password')
             t.join(5)
         self.assertEqual(unlocked, [True])

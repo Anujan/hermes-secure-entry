@@ -2,7 +2,7 @@
 import contextvars
 import json
 import threading
-from .native import owner
+from .native import MissingSessionID, MissingSessionBinding, owner
 from .server import Server
 
 
@@ -18,7 +18,7 @@ class Bridge:
         local = {v.name: value for v, value in contextvars.copy_context().items()}
         for key, value in zip(('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'), bound[1:]):
             if local.get('HERMES_SESSION_' + key) != value:
-                raise ValueError('missing task-local identity')
+                raise MissingSessionBinding('missing task-local identity')
         if not context.get('session_id') or context['session_id'] != bound[-1]:
             raise ValueError('session correlation mismatch')
         from hermes_constants import profile_name_for_home
@@ -39,7 +39,7 @@ class Bridge:
                 raise ValueError('interrupted')
             with self.service.lock:
                 if self.service.closed:
-                    raise ValueError('unloaded')
+                    return json.dumps({'success': False, 'status': 'unavailable', 'error_type': 'service_unloaded'})
                 generation = self.service.generation
             bound = self.bound_owner(context)
             with self.service.lock:
@@ -47,19 +47,24 @@ class Bridge:
                     raise ValueError('invalidated admission')
             if tool_name == 'browser_vault_enter_code' and args.get('handle'):
                 return json.dumps({'success': False, 'status': 'unsupported_handle_binding'})
+        except MissingSessionID:
+            return json.dumps({'success': False, 'status': 'unavailable', 'error_type': 'missing_session_id'})
+        except MissingSessionBinding:
+            return json.dumps({'success': False, 'status': 'unavailable', 'error_type': 'missing_session_binding'})
         except Exception:
-            return json.dumps({'success': False, 'status': 'unavailable'})
+            return json.dumps({'success': False, 'status': 'unavailable', 'error_type': 'admission_unavailable'})
         from agent.vault_backends import unlock
         old_code = unlock.get_code_prompt_callback()
         old_unlock = unlock.get_unlock_prompt_callback()
         requests = []
+        diagnostics = []  # Fixed local categories only; never exception or input text.
         active = threading.Event()
         active.set()
         deadline = self.service.broker.clock() + self.timeout
         def prompt(site, hint):
-            return self.prompt('code', site, bound, generation, requests, active, deadline)
+            return self.prompt('code', site, bound, generation, requests, active, deadline, diagnostics)
         def unlock_prompt(backend, display):
-            return self.prompt('unlock', display or backend, bound, generation, requests, active, deadline)
+            return self.prompt('unlock', display or backend, bound, generation, requests, active, deadline, diagnostics)
         try:
             unlock.set_code_prompt_callback(prompt)
             unlock.set_unlock_prompt_callback(unlock_prompt)
@@ -91,6 +96,8 @@ class Bridge:
                     'human_has_control', 'supervisor_required', 'unlock_unavailable',
                     'unlock_cancelled', 'unlock_failed'):
                 output['error_type'] = result['error_type']
+            if diagnostics and not success and status != 'commit_unknown':
+                output['error_type'] = diagnostics[-1]
             return json.dumps(output)
         finally:
             with self.service.lock:
@@ -102,7 +109,7 @@ class Bridge:
                     if request.status in ('pending', 'received'):
                         self.service.broker.finish(request.token, 'cancelled')
 
-    def prompt(self, kind, site, bound, generation, requests, active, deadline):
+    def prompt(self, kind, site, bound, generation, requests, active, deadline, diagnostics):
         from tools.interrupt import is_interrupted
         service, broker = self.service, self.service.broker
         box = []
@@ -119,7 +126,11 @@ class Bridge:
                         or self.bound_owner({'session_id': bound[-1]}) != bound):
                     return None
                 if service.server is None:
-                    service.server = Server(broker, port=service.port).__enter__()
+                    try:
+                        service.server = Server(broker, port=service.port).__enter__()
+                    except OSError:
+                        diagnostics.append('listener_binding_failed')
+                        return None
                 request = broker.issue(kind, site, bound, receive)
                 request.deadline = min(request.deadline, deadline)
                 requests.append(request)

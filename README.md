@@ -2,7 +2,7 @@
 
 A separate Windows-native Hermes plugin for private, one-use credential-entry pages reached through Tailscale Serve. It registers tools and lifecycle hooks through `PluginContext`; it does not modify Hermes core.
 
-**Version 0.2.0 is a preview/testing implementation.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms in an authorized Photon DM. OTP uses the existing native browser handler and its protections; this is not a new browser injector or a fix for native tab selection. Atomic update, sign-in-once, and save-and-sign-in remain unsupported before collection. Real Photon delivery, physical Safari/VoiceOver, real manager unlock, and browser authentication have not been verified. See [native compatibility and limits](docs/native-contract.md).
+**Version 0.2.1 is a preview/testing implementation.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms in an authorized Photon DM. OTP uses the existing native browser handler and its protections; this is not a new browser injector or a fix for native tab selection. Atomic update, sign-in-once, and save-and-sign-in remain unsupported before collection. Real Photon delivery, physical Safari/VoiceOver, real manager unlock, and browser authentication have not been verified. See [native compatibility and limits](docs/native-contract.md).
 
 ## What works
 
@@ -25,8 +25,8 @@ A separate Windows-native Hermes plugin for private, one-use credential-entry pa
 
 Requires `plugins.isolation: in_process`. The bridge refuses host isolation, cron, headless/API, delegated children, group chats, missing task-local identity, mismatched profile, and mismatched middleware/session correlation. It never changes `can_prompt_here` or installs a dummy unlock approval.
 
-1. On a real inspected login page, use native `browser_vault_list`. A locked manager can then be unlocked with native `browser_vault_unlock`; its genuine masked form asks for that manager's master password, never a website password.
-2. When a page asks for a verification code, call native `browser_vault_enter_code` **without a handle**. `secure_entry_request(operation="verification_code", ...)` only returns this instruction; it does not create a code collector for a model-supplied site. This preview rejects nonempty OTP handles before native execution because the tested installed snapshot lacks the newer handle-origin binding check. Saved-seed automatic TOTP through a handle is not enabled by this bridge.
+1. On a real inspected login page, use native `browser_vault(action="list")`. A locked manager can then be unlocked with native `browser_vault(action="unlock", backend="bitwarden")` (or `onepassword`); its genuine masked form asks for that manager's master password, never a website password.
+2. When a page asks for a verification code, call native `browser_vault(action="enter_code")` **without a handle**. `secure_entry_request(operation="verification_code", ...)` only returns this instruction; it does not create a code collector for a model-supplied site. This preview continues to reject nonempty OTP handles before native execution; saved-seed automatic TOTP through a handle is not enabled or newly claimed by this compatibility repair.
 3. Native inspection supplies the site and arms a one-use code form. The bridge calls native `send_message` with a destination constructed only from this authenticated DM context, then waits on the tool worker for up to 180 seconds across the execution. The gateway must remain able to send while the worker waits. Delivery failure revokes the request. No secret enters dispatch arguments or results.
 4. Open the link and enter the code in its masked field. HTTP POST hands the value through memory to the waiting native callback; native redaction, origin/inspection-nonce checks, supervisor-only secret write and takeover fences remain in force. The plugin never types via browser JavaScript or clicks Submit. Some websites auto-submit after a code is filled.
 5. `filled` means the native handler reported a fill, **not authenticated**. `unlocked` means the manager reported unlock. Cancel/expiry/unload before handoff accepts no later input. Once handed off, status is `commit_unknown` until a verified native result; cancellation cannot promise to undo a native action. Inspect the browser/manager before retrying an unknown outcome. No-code-field/passkey/app approval remains a typed native refusal: complete that approval on the actual device.
@@ -53,7 +53,7 @@ hermes plugins capabilities secure-entry
 
 Or add `--enable` to the installation command. There is no tool-override grant. Plugin capability declarations are empty because it requests none of Hermes's capability-gated host facades; enabling it still trusts in-process native vault writes, native direct-message dispatch and the local listener. **A separately coordinated gateway restart/new process and new conversation are required. The installer does not restart anything.** Do not overwrite an active installed copy: middleware/hooks can hotload into existing sessions even when tool schemas are deferred. This release does not claim a safe live new-session-only activation gate.
 
-`HERMES_HOME/plugins` survives normal Hermes updates; never put this plugin in the core checkout. This release is constrained to `>=0.21.5,<0.22.0`; rerun doctor and tests after host updates. It has no self-updater or dependency mutation path.
+`HERMES_HOME/plugins` survives normal Hermes updates; never put this plugin in the core checkout. This release is constrained to `>=0.22.1,<0.22.2`: the tested Hermes 0.22.1 consolidated vault-action contract, not a blanket promise about future releases. Rerun doctor and tests after host updates. It has no self-updater or dependency mutation path. See [the compatibility evidence and coordinated activation procedure](docs/hermes-0.22.1.md). Do not copy this upgrade over a running gateway's installed middleware.
 
 ## Tailscale deployment (operator-owned)
 
@@ -66,11 +66,31 @@ hermes config set plugins.entries.secure-entry.settings.port 8769
 
 No hostnames, addresses, accounts, or personal paths ship in this repository. Bind host is not configurable. The operator must inspect current Serve configuration, preserve unrelated ports/routes, and explicitly authorize the dedicated route. **Never use Tailscale Funnel** or another public proxy. All tailnet devices permitted to reach this service are inside the trust boundary; use Tailscale ACLs. Anyone possessing the link on an allowed device can submit it. The plugin does not claim separate sender authentication in Safari.
 
-`GET /health` returns only `{"status":"ok","version":"0.2.0"}`. The listener is lazy: before a request or explicit demo starts it, a refused health connection is expected.
+`GET /health` returns only `{"status":"ok","version":"0.2.1"}`. The listener is lazy: before a request or explicit demo starts it, a refused health connection is expected.
 
 Root `/r/<token>` paths avoid Serve-prefix ambiguity. Prefix-mounted URLs are rejected; do not deploy with prefix stripping or rewriting. No unrelated route needs modification.
 
 ## Diagnose and safe link test
+
+Request/bridge failures expose only fixed `error_type` categories, never exception text,
+identity values, request fields, tokens, or ports:
+
+- `missing_session_id`: native session binding lacks `HERMES_SESSION_ID`. The plugin
+  still refuses admission; it does not derive an ID from a session key or tool arguments.
+- `missing_session_binding`: another required identity binding is absent, or bridge
+  task-local identity does not match native ownership (process environment is insufficient).
+- `listener_binding_failed`: the authorized lazy loopback listener could not start
+  (`OSError` at listener startup); no form was issued by that attempt.
+- `service_unloaded`: admission reached a closed service.
+- `bridge_unavailable`: bridge not configured or its outer compatibility boundary failed.
+- `admission_unavailable`: other bridge admission refusal, including session correlation,
+  profile/isolation mismatch, interruption, or lifecycle invalidation.
+- `service_unavailable`: other request failure; this is deliberately not attributed to
+  identity or the listener without evidence (for example invalid origin or native store failure).
+
+These are diagnostic refusals, not evidence of authentication or permission to bypass
+the native checks. Status/cancel ownership misses remain opaque. Native terminal
+outcomes, including `commit_unknown`, retain their existing meaning.
 
 ```bash
 python -m secure_entry.cli diagnose
@@ -91,7 +111,7 @@ python -m pm.build_env --source . --out /absolute/scratch/secure-entry-env --gro
 # Windows uses ; between native forward-slash paths; POSIX uses :.
 PYTHONPATH='/absolute/hermes-source;/absolute/hermes-secure-entry' /absolute/scratch/secure-entry-env/Scripts/python.exe -m unittest discover -s tests -v
 hermes plugins doctor /absolute/hermes-secure-entry --ci
-hermes plugins validate /absolute/hermes-secure-entry --install-deps
+hermes plugins validate /absolute/hermes-secure-entry
 ```
 
 The tests use synthetic inputs only and temporary native vaults. Coverage includes actual encryption/readback, HTTP guards, CSRF, one-use concurrency, expiry, cancellation-versus-commit, profile/session scope, source staging, socket-free registration, real registered native OTP execution against a synthetic supervisor, redaction before native writes, HTTP-to-callback transport, genuine unlock entry, callback restoration/thread propagation, captured-callback invalidation, and delivery/expiry/lifecycle races. Synthetic supervisor success is not real browser integration. See [recovery](docs/recovery.md) and [security](SECURITY.md).

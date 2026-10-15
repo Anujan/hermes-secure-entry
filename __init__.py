@@ -13,7 +13,7 @@ def register(ctx):
     definitions = [
         ('secure_entry_request', service.request,
          'Request a private one-use form to ADD a website login to the native encrypted Hermes vault without a browser. '
-         'Photon DM only. Does not sign in. For verification codes call browser_vault_enter_code WITHOUT a handle; '
+         'Photon DM only. Does not sign in. For verification codes call browser_vault action=enter_code WITHOUT a handle; '
          'its native inspection arms a private form and sends its link to this DM. Update, transient sign-in and save-and-sign-in '
          'remain unsupported. Never pass credentials or codes in tool arguments.',
          {'operation': {'type':'string', 'enum':['add_login','update_login','sign_in_once','save_and_sign_in','verification_code']},

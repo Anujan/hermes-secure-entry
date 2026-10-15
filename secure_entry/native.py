@@ -3,6 +3,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
+class MissingSessionID(ValueError):
+    pass
+
+
+class MissingSessionBinding(ValueError):
+    pass
+
+
 def validate_origin(origin):
     from agent.vault_store import normalize_origin
     parsed = urlsplit(origin)
@@ -26,8 +34,12 @@ def owner(expected_home):
     values = tuple(get_session_env('HERMES_SESSION_' + key, '') for key in
                    ('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'))
     if (home != str(Path(expected_home).resolve()) or values[0] != 'photon'
-            or values[1] != 'dm' or not all(values[2:])):
+            or values[1] != 'dm'):
         raise ValueError('Secure entry requires a bound Photon DM and matching profile')
+    if not values[-1]:
+        raise MissingSessionID('Missing session ID binding')
+    if not all(values[2:]):
+        raise MissingSessionBinding('Missing session binding')
     return (home, *values)
 
 

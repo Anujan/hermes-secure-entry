@@ -1,8 +1,8 @@
 name: secure-entry
-version: 0.2.0
+version: 0.2.1
 description: Preview private Photon forms for native vault login adds and scoped native OTP and manager unlock callbacks. In-process only.
 license: MIT
-requires_hermes: ">=0.21.5,<0.22.0"
+requires_hermes: ">=0.22.1,<0.22.2"
 provides_tools:
   - secure_entry_request
   - secure_entry_status

@@ -2,7 +2,7 @@
 
 ## Expired, cancelled, failed, or unavailable link
 
-Do not reuse or replay the submission. `commit_unknown` means the save may have completed: inspect native metadata using `browser_vault_list`/`hermes vault list`, including any returned handle, before considering another add. Never blindly request a new link after this outcome. Expired/cancelled/unavailable requests with no attempted save can be replaced in the same authorized Photon DM. Never remove an old item before confirming a replacement.
+Do not reuse or replay the submission. `commit_unknown` means the save may have completed: inspect native metadata using `browser_vault(action="list")`/`hermes vault list`, including any returned handle, before considering another add. Never blindly request a new link after this outcome. Expired/cancelled/unavailable requests with no attempted save can be replaced in the same authorized Photon DM. Never remove an old item before confirming a replacement.
 
 Add-login forms expire after ten minutes; native code/unlock prompts share a total 180-second execution deadline. Refresh shows current state. `saved` means native vault storage verified by metadata readback. `filled` means the native handler reported a code fill; `unlocked` means the manager reported unlock. None means website authentication. For a code/unlock `commit_unknown`, inspect the browser/manager before retrying, not just the vault. A native tool may still be completing after the value was handed off.
 
@@ -27,7 +27,7 @@ Removing the dedicated Tailscale Serve route is an operator action; remove only 
 ## Before publication or real credentials
 
 1. Independent source/security review, including the explicit partial-feature disclosure.
-2. Run unit/integration tests with the PM-created test interpreter and native vault implementation; run `hermes plugins doctor PATH --ci` and `hermes plugins validate PATH --install-deps`.
+2. Run unit/integration tests with the PM-created test interpreter and native vault implementation; run `hermes plugins doctor PATH --ci` and `hermes plugins validate PATH` (no `--install-deps`: no plugin dependencies are declared, and dependency preparation must not mutate the live PM runtime).
 3. Start the synthetic demo at loopback8769. Verify `/health`, then have the operator create the dedicated tailnet-only HTTPS route. Test the one-use link on Safari/VoiceOver using only its printed synthetic values.
 4. Verify heading/labels/password masking/autocomplete/tab order/Continue/Cancel/status, expiry, link preview, replay refusal, and same-session status access. Screen-reader device testing is not replaced by HTML assertions.
 5. Stop the demo. Coordinate plugin enable/new gateway process and a new Photon conversation. Verify real Photon context binds `chat_type=dm`, chat/user/session key/session ID before expecting a request to succeed. Missing/unsupported context fails closed, not by falling back to a home channel.

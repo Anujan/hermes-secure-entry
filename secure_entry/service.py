@@ -4,7 +4,7 @@ import secrets
 import threading
 from .broker import Broker
 from .server import Server
-from .native import add_login, owner, validate_origin
+from .native import MissingSessionID, MissingSessionBinding, add_login, owner, validate_origin
 
 BLOCKERS = {
     'update_login': 'Native VaultStore exposes add/remove, but no public atomic same-record update API. Existing records are not deleted.',
@@ -28,28 +28,33 @@ class Service:
         self.bridge = Bridge(self, dispatch, isolation)
 
     def middleware(self, *, tool_name, args, next_call, **context):
+        # Hermes 0.22.1 consolidates the native tools into browser_vault actions.
+        # Normalize only the bridge's existing scopes; fill/save/unknown actions
+        # keep their native path and never acquire our prompt callbacks.
+        if tool_name == 'browser_vault' and args.get('action') in ('enter_code', 'unlock', 'list'):
+            tool_name = 'browser_vault_' + args['action']
         if tool_name not in ('browser_vault_enter_code', 'browser_vault_unlock', 'browser_vault_list'):
             return next_call(args)
         if not hasattr(self, 'bridge'):
-            return json.dumps({'success':False, 'status':'unavailable'})
+            return json.dumps({'success':False, 'status':'unavailable', 'error_type':'bridge_unavailable'})
         # Hermes skips middleware which raises before next_call. Never turn an
         # admission/compatibility failure into implicit permission to continue.
         try:
             return self.bridge.middleware(tool_name=tool_name, args=args, next_call=next_call, **context)
         except Exception:
-            return json.dumps({'success':False, 'status':'unavailable'})
+            return json.dumps({'success':False, 'status':'unavailable', 'error_type':'bridge_unavailable'})
 
     def request(self, args, **kwargs):
         try:
             # Fence even owner/store acquisition, which can block before indexing.
             with self.lock:
                 if self.closed:
-                    return json.dumps({'status':'unavailable'})
+                    return json.dumps({'status':'unavailable', 'error_type':'service_unloaded'})
                 generation = self.generation
             bound = owner(self.home)
             operation = args.get('operation', 'add_login')
             if operation == 'verification_code':
-                return json.dumps({'status':'native_tool_required', 'tool':'browser_vault_enter_code',
+                return json.dumps({'status':'native_tool_required', 'tool':'browser_vault', 'action':'enter_code',
                     'instruction':'Call the native tool without a handle. Only its inspected site can arm a private form. Never type a code in chat. Links are sent directly to this originating DM and may appear in history.'})
             if operation in BLOCKERS:
                 return json.dumps({'status':'unsupported_native_contract', 'operation':operation, 'reason':BLOCKERS[operation]})
@@ -63,7 +68,10 @@ class Service:
                 if self.closed or generation != self.generation:
                     return json.dumps({'status':'cancelled'})
                 if self.server is None:
-                    self.server = Server(self.broker, port=self.port).__enter__()
+                    try:
+                        self.server = Server(self.broker, port=self.port).__enter__()
+                    except OSError:
+                        return json.dumps({'status':'unavailable', 'error_type':'listener_binding_failed'})
                 request = self.broker.issue('login', origin, bound, lambda fields: add_login(store, origin, fields))
                 with self.broker.lock:
                     self.ids = {rid: item for rid, item in self.ids.items() if item[0] in self.broker.requests}
@@ -72,8 +80,12 @@ class Service:
             return json.dumps({'status':'pending', 'request_id':request_id, 'url':self.broker.url(request),
                                'origin':origin, 'operation':'add_login', 'expires_in_seconds':600,
                                'instruction':'Send this one-use link only in this originating conversation. The page saves a new native vault item; it does not sign in.'})
+        except MissingSessionID:
+            return json.dumps({'status':'unavailable', 'error_type':'missing_session_id'})
+        except MissingSessionBinding:
+            return json.dumps({'status':'unavailable', 'error_type':'missing_session_binding'})
         except Exception:
-            return json.dumps({'status':'unavailable', 'reason':'Requires a bound human Photon DM, a valid exact HTTPS origin, and an available loopback listener.'})
+            return json.dumps({'status':'unavailable', 'error_type':'service_unavailable'})
 
     def status(self, args, **kwargs):
         try:

@@ -61,7 +61,8 @@ class ServiceTests(unittest.TestCase):
         try:
             result = json.loads(service.request({'operation':'verification_code', 'origin':'https://example.invalid'}))
             self.assertEqual(result['status'], 'native_tool_required')
-            self.assertEqual(result['tool'], 'browser_vault_enter_code')
+            self.assertEqual(result['tool'], 'browser_vault')
+            self.assertEqual(result['action'], 'enter_code')
             self.assertNotIn('url', result)
             self.assertIsNone(service.server)
         finally: service.close()
@@ -92,7 +93,7 @@ class ServiceTests(unittest.TestCase):
                     session_key='synthetic-key', session_id='synthetic-session'))),
                 _running_agents={}, _same_chat_runs=Mock(return_value=[]),
                 _sibling_thread_run_keys=Mock(return_value=[]), _chat_scoped_run_keys=Mock(return_value=[]),
-                _interrupt_and_clear_session=AsyncMock(), adapters={})
+                _interrupt_and_clear_session=AsyncMock(), _hm_stop_owner_turn=AsyncMock(), adapters={})
             event = SimpleNamespace(source=SimpleNamespace(platform='photon', chat_id='synthetic-chat'))
             # Isolate the host launcher import, not stop dispatch logic. Importing
             # gateway.run would relaunch the test runner into the live PM runtime.
