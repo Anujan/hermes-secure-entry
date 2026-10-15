@@ -6,11 +6,16 @@ def register(ctx):
     from hermes_constants import get_hermes_home
     service = Service(ctx.get_config('public_base_url', default='https://example.invalid:9443'),
                       str(get_hermes_home()), port=ctx.get_config('port', default=8769))
+    from hermes_cli.plugin_isolation import isolation_mode
+    from .secure_entry.native import dispatch_message
+    service.configure_bridge(lambda name, args: dispatch_message(ctx, name, args), isolation=isolation_mode())
+    ctx.register_middleware('tool_execution', service.middleware)
     definitions = [
         ('secure_entry_request', service.request,
          'Request a private one-use form to ADD a website login to the native encrypted Hermes vault without a browser. '
-         'Photon DM only. Does not sign in. Update, transient sign-in, save-and-sign-in, and verification-code operations '
-         'currently return unsupported_native_contract WITHOUT collecting secrets. Never pass credentials in tool arguments.',
+         'Photon DM only. Does not sign in. For verification codes call browser_vault_enter_code WITHOUT a handle; '
+         'its native inspection arms a private form and sends its link to this DM. Update, transient sign-in and save-and-sign-in '
+         'remain unsupported. Never pass credentials or codes in tool arguments.',
          {'operation': {'type':'string', 'enum':['add_login','update_login','sign_in_once','save_and_sign_in','verification_code']},
           'origin': {'type':'string','description':'Exact HTTPS website origin, without path or trailing slash. Visible to the user before entry.'}},
          ['operation','origin']),

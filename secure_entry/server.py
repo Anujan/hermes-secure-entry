@@ -53,7 +53,7 @@ class Server:
                     self.reply(421, 'Unrecognized host')
                     return None
                 if self.path == '/health':
-                    self.reply(200, b'{"status":"ok","version":"0.1.0"}', 'application/json')
+                    self.reply(200, b'{"status":"ok","version":"0.2.0"}', 'application/json')
                     return None
                 match = re.fullmatch(r'/r/([A-Za-z0-9_-]{43})', self.path)
                 if not match:

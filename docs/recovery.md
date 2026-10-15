@@ -4,7 +4,7 @@
 
 Do not reuse or replay the submission. `commit_unknown` means the save may have completed: inspect native metadata using `browser_vault_list`/`hermes vault list`, including any returned handle, before considering another add. Never blindly request a new link after this outcome. Expired/cancelled/unavailable requests with no attempted save can be replaced in the same authorized Photon DM. Never remove an old item before confirming a replacement.
 
-If the form was left open more than ten minutes, POST refuses it. Refresh shows the current state. `saved` means native vault storage verified by metadata readback; it does not mean a browser was filled or a website authenticated.
+Add-login forms expire after ten minutes; native code/unlock prompts share a total 180-second execution deadline. Refresh shows current state. `saved` means native vault storage verified by metadata readback. `filled` means the native handler reported a code fill; `unlocked` means the manager reported unlock. None means website authentication. For a code/unlock `commit_unknown`, inspect the browser/manager before retrying, not just the vault. A native tool may still be completing after the value was handed off.
 
 ## Cancellation contract
 
@@ -31,4 +31,5 @@ Removing the dedicated Tailscale Serve route is an operator action; remove only 
 3. Start the synthetic demo at loopback8769. Verify `/health`, then have the operator create the dedicated tailnet-only HTTPS route. Test the one-use link on Safari/VoiceOver using only its printed synthetic values.
 4. Verify heading/labels/password masking/autocomplete/tab order/Continue/Cancel/status, expiry, link preview, replay refusal, and same-session status access. Screen-reader device testing is not replaced by HTML assertions.
 5. Stop the demo. Coordinate plugin enable/new gateway process and a new Photon conversation. Verify real Photon context binds `chat_type=dm`, chat/user/session key/session ID before expecting a request to succeed. Missing/unsupported context fails closed, not by falling back to a home channel.
-6. Do not test browser OTP/transient sign-in with real credentials: this release intentionally does not support them. Obtain the upstream host extension described in native-contract.md first.
+6. Test the OTP/unlock preview with synthetic values and a controlled page first. Verify native list/unlock, actual-site form arming, direct DM delivery while the worker waits, expiry/cancel/duplicate POST, code redaction, callback cleanup, supervisor/takeover refusal and unknown-outcome handling. Use no OTP handle on this snapshot. Do not mistake a synthetic supervisor result for real browser integration. Transient sign-in remains dropped. Real external-manager/Photon/browser/HTTPS testing is not claimed by the automated suite.
+7. Do not copy upgraded middleware over an active installed plugin. Hooks/middleware may hotload into current sessions even when schemas are deferred; no safe live new-session-only activation gate is claimed. Coordinate unload/new process and a fresh conversation first. Native capability URLs may appear in mirrored session history; never post them publicly.

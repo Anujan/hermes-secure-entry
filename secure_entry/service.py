@@ -1,8 +1,4 @@
-"""Plugin service: native encrypted vault ADD only until stronger host APIs exist.
-
-Unsupported operations fail before creating a request or accepting credentials.
-No callbacks are installed to pretend a native browser target binding exists.
-"""
+"""Native vault ADD service and scoped native code/unlock prompt middleware."""
 import json
 import secrets
 import threading
@@ -14,7 +10,6 @@ BLOCKERS = {
     'update_login': 'Native VaultStore exposes add/remove, but no public atomic same-record update API. Existing records are not deleted.',
     'sign_in_once': 'Native save-login prompt always persists before fill; no supported transient native password-entry API exists.',
     'save_and_sign_in': 'Native save-login callback has origin/label only and fill can reselect a same-origin tab. No exact target/frame/generation binding contract.',
-    'verification_code': 'Native code prompt has site/hint only. Native OTP nonce fences DOM controls, but no public request binding covers exact target/frame/generation and ambiguous tabs.',
 }
 
 
@@ -28,6 +23,22 @@ class Service:
         self.generation = 0
         self.closed = False
 
+    def configure_bridge(self, dispatch, isolation):
+        from .bridge import Bridge
+        self.bridge = Bridge(self, dispatch, isolation)
+
+    def middleware(self, *, tool_name, args, next_call, **context):
+        if tool_name not in ('browser_vault_enter_code', 'browser_vault_unlock', 'browser_vault_list'):
+            return next_call(args)
+        if not hasattr(self, 'bridge'):
+            return json.dumps({'success':False, 'status':'unavailable'})
+        # Hermes skips middleware which raises before next_call. Never turn an
+        # admission/compatibility failure into implicit permission to continue.
+        try:
+            return self.bridge.middleware(tool_name=tool_name, args=args, next_call=next_call, **context)
+        except Exception:
+            return json.dumps({'success':False, 'status':'unavailable'})
+
     def request(self, args, **kwargs):
         try:
             # Fence even owner/store acquisition, which can block before indexing.
@@ -37,6 +48,9 @@ class Service:
                 generation = self.generation
             bound = owner(self.home)
             operation = args.get('operation', 'add_login')
+            if operation == 'verification_code':
+                return json.dumps({'status':'native_tool_required', 'tool':'browser_vault_enter_code',
+                    'instruction':'Call the native tool without a handle. Only its inspected site can arm a private form. Never type a code in chat. Links are sent directly to this originating DM and may appear in history.'})
             if operation in BLOCKERS:
                 return json.dumps({'status':'unsupported_native_contract', 'operation':operation, 'reason':BLOCKERS[operation]})
             if operation != 'add_login':
@@ -78,7 +92,7 @@ class Service:
             if expected != bound:
                 return json.dumps({'status':'unavailable'})
             with self.broker.lock:
-                if self.broker.status(token)['status'] == 'pending':
+                if self.broker.status(token)['status'] in ('pending', 'received'):
                     self.broker.finish(token, 'cancelled')
             return json.dumps(self.broker.status(token))
         except Exception:

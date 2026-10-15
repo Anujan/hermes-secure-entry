@@ -13,11 +13,12 @@ from .service import BLOCKERS
 
 def diagnose():
     from agent.vault_store import VaultStore
-    print(json.dumps({'version':'0.1.0','core_overrides':False,'browser_prompts':'unsupported_native_contract',
+    print(json.dumps({'version':'0.2.0','core_overrides':False,'browser_prompts':'native_callback_preview',
                       'native_vault_available':callable(getattr(VaultStore, 'add_item', None)),
-                      'missing_contracts':['native_atomic_update','native_transient_password',
-                                           'native_bound_secure_prompt','native_exact_target_commit'],
-                      'operations':{'add_login':'supported', **{k:'unsupported' for k in BLOCKERS}}}))
+                      'missing_contracts':['native_atomic_update','native_transient_password','native_exact_target_commit'],
+                      'requires_isolation':'in_process', 'otp_handles':'unsupported_handle_binding',
+                      'operations':{'add_login':'supported', 'verification_code':'native_tool_required',
+                                    **{k:'unsupported' for k in BLOCKERS}}}))
 
 
 def demo_action(store, fields):

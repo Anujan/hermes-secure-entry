@@ -48,10 +48,21 @@ class ServiceTests(unittest.TestCase):
         from secure_entry.service import Service
         service = Service('https://example.ts.net:9443', str(get_hermes_home()), port=0)
         try:
-            for operation in ['update_login', 'sign_in_once', 'save_and_sign_in', 'verification_code']:
+            for operation in ['update_login', 'sign_in_once', 'save_and_sign_in']:
                 result = json.loads(service.request({'operation':operation, 'origin':'https://example.invalid'}))
                 self.assertEqual(result['status'], 'unsupported_native_contract')
                 self.assertNotIn('url', result)
+            self.assertIsNone(service.server)
+        finally: service.close()
+
+    def test_code_request_redirects_to_native_inspection_without_collecting(self):
+        from secure_entry.service import Service
+        service = Service('https://example.ts.net:9443', str(get_hermes_home()), port=0)
+        try:
+            result = json.loads(service.request({'operation':'verification_code', 'origin':'https://example.invalid'}))
+            self.assertEqual(result['status'], 'native_tool_required')
+            self.assertEqual(result['tool'], 'browser_vault_enter_code')
+            self.assertNotIn('url', result)
             self.assertIsNone(service.server)
         finally: service.close()
 

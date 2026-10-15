@@ -13,15 +13,18 @@ class RegistrationTests(unittest.TestCase):
         sys.modules[spec.name] = plugin
         spec.loader.exec_module(plugin)
         class Context:
-            def __init__(self): self.tools, self.hooks, self.cleanup = {}, {}, []
+            def __init__(self): self.tools, self.hooks, self.cleanup, self.middleware = {}, {}, [], {}
             def get_config(self, key, default=None): return {'public_base_url':'https://example.ts.net:9443','port':8769}.get(key, default)
             def register_tool(self, **kw): self.tools[kw['name']] = kw
             def register_hook(self, name, callback): self.hooks[name] = callback
+            def register_middleware(self, name, callback): self.middleware[name] = callback
+            def dispatch_tool(self, *args, **kwargs): raise AssertionError('must not dispatch during registration')
             def on_unload(self, callback): self.cleanup.append(callback)
         ctx = Context()
         plugin.register(ctx)
         self.assertEqual(set(ctx.tools), {'secure_entry_request', 'secure_entry_status', 'secure_entry_cancel'})
         self.assertIn('agent_loop_stopped', ctx.hooks)
+        self.assertIn('tool_execution', ctx.middleware)
         for item in ctx.tools.values():
             properties = item['schema']['parameters']['properties']
             self.assertNotIn('password', properties)

@@ -31,6 +31,21 @@ def owner(expected_home):
     return (home, *values)
 
 
+def dispatch_message(ctx, name, args):
+    """Use native delivery, including snapshots without a registered send tool.
+
+    The native CLI also calls send_message_tool directly. Select BEFORE sending,
+    never retry another route after an ambiguous delivery error.
+    """
+    if name != 'send_message':
+        raise ValueError('only native message delivery is supported')
+    from tools.registry import registry
+    if registry.get_entry(name) is not None:
+        return ctx.dispatch_tool(name, args)
+    from tools.send_message_tool import send_message_tool
+    return send_message_tool(args)
+
+
 def add_login(store, origin, fields):
     from agent.redact import register_vault_redaction_value
     validate_origin(origin)

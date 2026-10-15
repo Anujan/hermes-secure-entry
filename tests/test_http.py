@@ -16,7 +16,7 @@ class HTTPTests(unittest.TestCase):
         with Server(broker, port=0) as server, contextlib.redirect_stderr(io.StringIO()) as logs:
             root = 'http://127.0.0.1:' + str(server.port)
             with urllib.request.urlopen(root + '/health') as response:
-                self.assertEqual(response.read(), b'{"status":"ok","version":"0.1.0"}')
+                self.assertEqual(response.read(), b'{"status":"ok","version":"0.2.0"}')
             path = root + '/r/' + r.token
             with urllib.request.urlopen(path) as response:
                 page = response.read().decode()

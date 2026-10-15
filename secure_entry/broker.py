@@ -33,7 +33,7 @@ class Broker:
         self.requests = {}
 
     def issue(self, kind, origin, owner, apply):
-        if kind not in ('login', 'code') or not origin or not owner:
+        if kind not in ('login', 'code', 'unlock') or not origin or not owner:
             raise ValueError('invalid request metadata')
         with self.lock:
             for token in list(self.requests):
@@ -53,7 +53,7 @@ class Broker:
 
     def _lookup(self, token):
         request = self.requests.get(token)
-        if request and request.status == 'pending' and self.clock() >= request.deadline:
+        if request and request.status in ('pending', 'received') and self.clock() >= request.deadline:
             request.status = 'expired'
             request.apply = None
             request.event.set()
@@ -85,7 +85,8 @@ class Broker:
             if fields.get('action') == 'cancel':
                 self.finish(token, 'cancelled')
                 return self.status(token)
-            required = ('identifier', 'password') if request.kind == 'login' else ('code',)
+            required = (('identifier', 'password') if request.kind == 'login' else
+                        ('password',) if request.kind == 'unlock' else ('code',))
             limits = {'identifier':320, 'password':4096, 'code':256}
             if (fields.get('action') != 'submit'
                     or any(not isinstance(fields.get(k), str) or not fields[k] or len(fields[k]) > limits[k] for k in required)):
@@ -124,7 +125,7 @@ class Broker:
             content = '<p role="status">' + escape(status) + '</p>'
             if request and status == 'pending':
                 content += '<p>Site: <strong>' + escape(request.origin) + '</strong></p>'
-                content += '<p>This link works once and expires in ten minutes. Never enter a passkey here.</p>'
+                content += '<p>This link works once and expires shortly. Native prompts expire in at most three minutes; login saves in ten minutes. Never enter a passkey here.</p>'
                 content += '<form method="post"><input type="hidden" name="csrf" value="' + request.csrf + '">'
                 if request.kind == 'login':
                     content += ('<p>Save a website login in the native encrypted Hermes vault. This does not sign you in.</p>'
@@ -132,6 +133,11 @@ class Broker:
                                 '<input id="identifier" name="identifier" autocomplete="username" required maxlength="320">'
                                 '<label for="password">Website password</label>'
                                 '<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="4096">')
+                elif request.kind == 'unlock':
+                    content += ('<p>Unlock the named password manager for the waiting native tool. '
+                                'This is your manager master password, not a website password. It is not saved by this plugin.</p>'
+                                '<label for="password">Password manager master password</label>'
+                                '<input id="password" name="password" type="password" autocomplete="off" required maxlength="4096">')
                 else:
                     content += ('<p>Enter the SMS, email, authenticator, or other login verification code. '
                                 'It will be sent only to the waiting native browser tool. This does not confirm sign-in.</p>'
@@ -141,8 +147,12 @@ class Broker:
                             '<button type="submit" name="action" value="cancel" formnovalidate>Cancel</button></form>')
             elif status == 'received':
                 content += '<p>Received privately. Waiting for the native tool. Refresh to check; do not submit again.</p>'
-            elif status == 'applied':
+            elif status in ('applied', 'filled'):
                 content += '<p>The native tool filled the code field. Authentication has not been verified.</p>'
+            elif status == 'unlocked':
+                content += '<p>The native password manager reports unlocked. No website authentication has been verified.</p>'
+            elif status == 'commit_unknown' and request.kind != 'login':
+                content += '<p>Input handed to the native tool; outcome not yet verified. Inspect the browser or manager before retrying. Cancellation cannot undo a native action already begun.</p>'
             elif status == 'commit_unknown':
                 content += ('<p>The save may have completed, but could not be verified. '
                             'Inspect the native vault before retrying to avoid duplicate items. '

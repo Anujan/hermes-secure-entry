@@ -2,7 +2,7 @@
 
 A separate Windows-native Hermes plugin for private, one-use credential-entry pages reached through Tailscale Serve. It registers tools and lifecycle hooks through `PluginContext`; it does not modify Hermes core.
 
-**Version 0.1.0 is a partial implementation for preview/testing only. It can ADD a website login to the native encrypted Hermes vault without a browser. It cannot yet update an existing item, sign in once without saving, save-and-sign-in, or apply a verification code to a strictly bound browser target. Those operations return `unsupported_native_contract` before collecting anything. Do not advertise this release as complete browser sign-in support.** See [native integration blockers](docs/native-contract.md).
+**Version 0.2.0 is a preview/testing implementation.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms in an authorized Photon DM. OTP uses the existing native browser handler and its protections; this is not a new browser injector or a fix for native tab selection. Atomic update, sign-in-once, and save-and-sign-in remain unsupported before collection. Real Photon delivery, physical Safari/VoiceOver, real manager unlock, and browser authentication have not been verified. See [native compatibility and limits](docs/native-contract.md).
 
 ## What works
 
@@ -10,16 +10,28 @@ A separate Windows-native Hermes plugin for private, one-use credential-entry pa
 - The page explicitly names the exact website origin and says it will save a **new** native vault item, not sign in. The username is visible metadata; the password is not returned to the tool/model.
 - On submission, the native `VaultStore.add_item` encrypts the login. The plugin reads back metadata only before reporting `saved`. If the native write outcome cannot be verified, `commit_unknown` preserves returned handle metadata when available: inspect the vault before retrying to avoid duplicates.
 - `secure_entry_status(request_id)` and `secure_entry_cancel(request_id)` require the same home, platform, sender, chat, session key, and session ID. Delivered lifecycle stop/reset/abnormal-end hooks and plugin unload cancel pending entries; normal turn completion preserves the delivered link. **Idle `/stop` does not reliably revoke a delivered link**: the host emits no stop lifecycle hook when no agent is running. Use the form's **Cancel** button or `secure_entry_cancel(request_id)` in the originating session. Do not rely on idle `/stop`.
-- The listener starts lazily for a valid add-login request, never during import/registration/doctor. It binds **127.0.0.1 only**. No network endpoint creates requests.
+- The listener starts lazily for a valid add-login request or an actual native code/unlock callback, never during import/registration/doctor. It binds **127.0.0.1 only**. No network endpoint creates requests.
 - Linear HTML with heading, labels, username/password autocomplete, natural keyboard order, no modal, no JavaScript, and explicit status/cancel/expired states. GET previews do not consume the link; valid POST consumes it once. Safari/VoiceOver device testing is still required.
 
 ## Scope and priorities
 
 1. Ship the achievable **add-vault-login** path as a preview/testing-only partial implementation.
 2. For replacement, add the new login and verify its metadata first. Inspect the new and old handles using the existing native vault tools. Remove the old item only through those existing tools **after explicit user approval**. The plugin never deletes automatically, never implements delete-then-add, and does not call this an atomic same-record update. If a save is `commit_unknown`, inspect the vault before retrying or considering any removal.
-3. Research a supported, strictly bound native **OTP** integration next. No operational OTP collection or browser filling is included in this release.
+3. Exercise the implemented native **OTP callback preview** with synthetic data before real use. No OTP form exists until the native tool inspects an actual code field and supplies its site.
 
-**Sign-in-once work is dropped for now**; it is not a delivery priority. Its unsupported-operation response remains only to refuse collection safely. Browser save-and-sign-in and atomic same-record update are also not delivered here. Native callback setters are real APIs and a technical bridge can exist on an authorized prompt-capable surface, but this plugin lacks the complete supported Photon delivery/binding contract and does not install one.
+**Sign-in-once work is dropped for now**; it is not a delivery priority. Its unsupported-operation response remains only to refuse collection safely. Browser save-and-sign-in and atomic same-record update are also not delivered here.
+
+## Native OTP and unlock preview
+
+Requires `plugins.isolation: in_process`. The bridge refuses host isolation, cron, headless/API, delegated children, group chats, missing task-local identity, mismatched profile, and mismatched middleware/session correlation. It never changes `can_prompt_here` or installs a dummy unlock approval.
+
+1. On a real inspected login page, use native `browser_vault_list`. A locked manager can then be unlocked with native `browser_vault_unlock`; its genuine masked form asks for that manager's master password, never a website password.
+2. When a page asks for a verification code, call native `browser_vault_enter_code` **without a handle**. `secure_entry_request(operation="verification_code", ...)` only returns this instruction; it does not create a code collector for a model-supplied site. This preview rejects nonempty OTP handles before native execution because the tested installed snapshot lacks the newer handle-origin binding check. Saved-seed automatic TOTP through a handle is not enabled by this bridge.
+3. Native inspection supplies the site and arms a one-use code form. The bridge calls native `send_message` with a destination constructed only from this authenticated DM context, then waits on the tool worker for up to 180 seconds across the execution. The gateway must remain able to send while the worker waits. Delivery failure revokes the request. No secret enters dispatch arguments or results.
+4. Open the link and enter the code in its masked field. HTTP POST hands the value through memory to the waiting native callback; native redaction, origin/inspection-nonce checks, supervisor-only secret write and takeover fences remain in force. The plugin never types via browser JavaScript or clicks Submit. Some websites auto-submit after a code is filled.
+5. `filled` means the native handler reported a fill, **not authenticated**. `unlocked` means the manager reported unlock. Cancel/expiry/unload before handoff accepts no later input. Once handed off, status is `commit_unknown` until a verified native result; cancellation cannot promise to undo a native action. Inspect the browser/manager before retrying an unknown outcome. No-code-field/passkey/app approval remains a typed native refusal: complete that approval on the actual device.
+
+**The private capability URL may be visible to the model/session history**, because native `send_message` mirrors sent text. Codes and passwords are not included. This is not transcript-free link delivery. Anyone with a link and tailnet access can submit it. Native tab-selection ambiguity and same-origin DOM limitations are unresolved; inspect the intended page first and do not claim exact immutable target/frame/generation binding.
 
 ## Install and activation
 
@@ -39,7 +51,7 @@ hermes plugins enable secure-entry --no-allow-tool-override
 hermes plugins capabilities secure-entry
 ```
 
-Or add `--enable` to the installation command. There is no tool-override grant. Plugin capability declarations are empty because it requests none of Hermes's capability-gated host facades; enabling it still trusts in-process native vault writes and the local listener. **A separately coordinated gateway restart/new process and new conversation are required. The installer does not restart anything.** Do not change a running session's tool schema.
+Or add `--enable` to the installation command. There is no tool-override grant. Plugin capability declarations are empty because it requests none of Hermes's capability-gated host facades; enabling it still trusts in-process native vault writes, native direct-message dispatch and the local listener. **A separately coordinated gateway restart/new process and new conversation are required. The installer does not restart anything.** Do not overwrite an active installed copy: middleware/hooks can hotload into existing sessions even when tool schemas are deferred. This release does not claim a safe live new-session-only activation gate.
 
 `HERMES_HOME/plugins` survives normal Hermes updates; never put this plugin in the core checkout. This release is constrained to `>=0.21.5,<0.22.0`; rerun doctor and tests after host updates. It has no self-updater or dependency mutation path.
 
@@ -54,9 +66,9 @@ hermes config set plugins.entries.secure-entry.settings.port 8769
 
 No hostnames, addresses, accounts, or personal paths ship in this repository. Bind host is not configurable. The operator must inspect current Serve configuration, preserve unrelated ports/routes, and explicitly authorize the dedicated route. **Never use Tailscale Funnel** or another public proxy. All tailnet devices permitted to reach this service are inside the trust boundary; use Tailscale ACLs. Anyone possessing the link on an allowed device can submit it. The plugin does not claim separate sender authentication in Safari.
 
-`GET /health` returns only `{"status":"ok","version":"0.1.0"}`. The listener is lazy: before a request or explicit demo starts it, a refused health connection is expected.
+`GET /health` returns only `{"status":"ok","version":"0.2.0"}`. The listener is lazy: before a request or explicit demo starts it, a refused health connection is expected.
 
-Root `/r/<token>` paths avoid Serve-prefix ambiguity. Prefix-mounted URLs are rejected in 0.1.0; do not deploy with prefix stripping or rewriting. No unrelated route needs modification.
+Root `/r/<token>` paths avoid Serve-prefix ambiguity. Prefix-mounted URLs are rejected; do not deploy with prefix stripping or rewriting. No unrelated route needs modification.
 
 ## Diagnose and safe link test
 
@@ -82,10 +94,10 @@ hermes plugins doctor /absolute/hermes-secure-entry --ci
 hermes plugins validate /absolute/hermes-secure-entry --install-deps
 ```
 
-The tests use synthetic inputs only and temporary native vaults. Coverage includes actual encryption/readback, HTTP security headers, CSRF, null/mobile Origin acceptance, hostile Host, duplicate/oversized bodies, one-use concurrency, expiry, cancellation-versus-commit, profile/session scope, unsupported-operation refusal, source staging, and socket-free registration. They do not prove physical iPhone accessibility or browser sign-in. See [recovery](docs/recovery.md) and [security](SECURITY.md).
+The tests use synthetic inputs only and temporary native vaults. Coverage includes actual encryption/readback, HTTP guards, CSRF, one-use concurrency, expiry, cancellation-versus-commit, profile/session scope, source staging, socket-free registration, real registered native OTP execution against a synthetic supervisor, redaction before native writes, HTTP-to-callback transport, genuine unlock entry, callback restoration/thread propagation, captured-callback invalidation, and delivery/expiry/lifecycle races. Synthetic supervisor success is not real browser integration. See [recovery](docs/recovery.md) and [security](SECURITY.md).
 
 ## Disclosure
 
-The plugin opens a local HTTP server, uses the native encrypted vault, and returns opaque links/request metadata to the conversation. Password values travel only from the private page through memory to the native vault. No telemetry, external assets, third-party collection service, payment support, login auto-click, passkey emulation, saved-password reads, or generic credential-injection API. The internal code-form transport is tested with synthetic data but is **not exposed as an operational native OTP feature**.
+The plugin opens a local HTTP server, uses the native encrypted vault, and returns/sends opaque links and request metadata to the originating conversation. Password/code values travel only from the private page through memory to the native store or waiting native callback. No telemetry, external assets, third-party collection service, payment support, login auto-click, passkey emulation, saved-password reads, or generic credential-injection API. OTP and unlock remain preview features, not production authentication claims.
 
 Architecture/reference research included the Linux/Telegram `hermes-secure-env-plugin` project; no source was copied. This is an independent Windows/Photon/native-vault implementation, not an environment-variable ingress port.

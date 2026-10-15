@@ -12,7 +12,9 @@ class CLITests(unittest.TestCase):
         out = io.StringIO()
         with patch('sys.stdout', out): diagnose()
         result = json.loads(out.getvalue())
-        self.assertEqual(result['browser_prompts'], 'unsupported_native_contract')
+        self.assertEqual(result['browser_prompts'], 'native_callback_preview')
+        self.assertEqual(result['operations']['verification_code'], 'native_tool_required')
+        self.assertEqual(result['otp_handles'], 'unsupported_handle_binding')
         self.assertFalse(result['core_overrides'])
         self.assertIn('native_atomic_update', result['missing_contracts'])
 
