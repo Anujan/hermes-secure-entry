@@ -24,6 +24,9 @@ jobs:
         shell: bash
         working-directory: hermes
         run: python -m pm.build_env --source . --out "$GITHUB_WORKSPACE/test-env" --group dev --group test
+      - name: Install optional bot SDKs in the isolated test environment only
+        shell: bash
+        run: uv pip install --python "$GITHUB_WORKSPACE/test-env/Scripts/python.exe" aiohttp python-telegram-bot discord.py
       - name: Test synthetic HTTP and native encrypted vault
         shell: bash
         working-directory: plugin

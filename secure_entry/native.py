@@ -29,17 +29,27 @@ def owner(expected_home):
     from agent.delegation_context import is_delegated_child_context
     if (_is_cron_approval_context() or _is_single_query_approval_context()
             or _is_unattended_platform_approval_context() or is_delegated_child_context()):
-        raise ValueError('Secure entry requires the originating human Photon conversation')
+        raise ValueError('Secure entry requires the originating human DM conversation')
     home = str(Path(get_hermes_home()).resolve())
     values = tuple(get_session_env('HERMES_SESSION_' + key, '') for key in
                    ('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'))
-    if (home != str(Path(expected_home).resolve()) or values[0] != 'photon'
+    if (home != str(Path(expected_home).resolve()) or values[0] not in ('photon', 'discord', 'telegram')
             or values[1] != 'dm'):
-        raise ValueError('Secure entry requires a bound Photon DM and matching profile')
+        raise ValueError('Secure entry requires a bound supported DM and matching profile')
     if not values[-1]:
         raise MissingSessionID('Missing session ID binding')
     if not all(values[2:]):
         raise MissingSessionBinding('Missing session binding')
+    # Native getters retain a legacy process-env fallback. Admission requires
+    # authenticated task-local values, for metadata tools as well as callbacks.
+    import contextvars
+    local = {var.name: value for var, value in contextvars.copy_context().items()}
+    for key, value in zip(('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'), values):
+        if local.get('HERMES_SESSION_' + key) != value:
+            raise MissingSessionBinding('Missing task-local identity')
+    from hermes_constants import profile_name_for_home
+    if local.get('HERMES_SESSION_PROFILE', '') not in ('', profile_name_for_home(expected_home)):
+        raise ValueError('Profile mismatch')
     return (home, *values)
 
 

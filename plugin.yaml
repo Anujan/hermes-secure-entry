@@ -1,6 +1,6 @@
 name: secure-entry
-version: 0.2.1
-description: Preview private Photon forms for native vault login adds and scoped native OTP and manager unlock callbacks. In-process only.
+version: 0.3.0
+description: Preview private Photon, Discord and Telegram DM forms for native vault login adds and scoped native OTP and manager unlock callbacks. In-process only.
 license: MIT
 requires_hermes: ">=0.22.1,<0.22.2"
 provides_tools:
@@ -15,7 +15,7 @@ provides_hooks:
   - on_session_reset
 python_dependencies: []
 capabilities: []
-tags: [security, vault, photon, windows, accessibility]
+tags: [security, vault, photon, discord, telegram, windows, accessibility]
 config_schema:
   public_base_url:
     type: str

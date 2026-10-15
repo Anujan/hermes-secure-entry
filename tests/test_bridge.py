@@ -17,9 +17,13 @@ from secure_entry.service import Service
 
 
 class BridgeTests(unittest.TestCase):
+    platform = 'photon'
+    user_id = 'synthetic-owner'
+    chat_id = 'any;-;+15555550123'
+
     def setUp(self):
-        self.tokens = set_session_vars(platform='photon', chat_type='dm', chat_id='synthetic-chat',
-            user_id='synthetic-owner', session_key='synthetic-key', session_id='synthetic-session',
+        self.tokens = set_session_vars(platform=self.platform, chat_type='dm', chat_id=self.chat_id,
+            user_id=self.user_id, session_key='synthetic-key', session_id='synthetic-session',
             profile=profile_name_for_home(get_hermes_home()) or '', cron_session='')
         self.service = Service('https://example.invalid', str(get_hermes_home()), port=0)
         self.ctx = PluginContext(PluginManifest(name='synthetic-bridge'), get_plugin_manager())
@@ -27,7 +31,7 @@ class BridgeTests(unittest.TestCase):
         self.delivered = threading.Event()
         def send(name, args):
             self.assertEqual(name, 'send_message')
-            self.assertEqual(args['target'], 'photon:synthetic-chat')
+            self.assertEqual(args['target'], self.platform + ':' + self.chat_id)
             self.sent.append(args)
             self.delivered.set()
             return json.dumps({'success': True})
@@ -50,6 +54,15 @@ class BridgeTests(unittest.TestCase):
         def run():
             try: results.append(ctx.run(fn))
             except BaseException as exc: errors.append(exc)
+            finally:
+                # Native sync-to-async delivery caches one loop per worker.
+                # These synthetic workers are short-lived; release their loop.
+                import sys
+                native_tools = sys.modules.get('model_tools')
+                local = getattr(native_tools, '_worker_thread_local', None)
+                loop = getattr(local, 'loop', None)
+                if loop is not None and not loop.is_running() and not loop.is_closed():
+                    loop.close()
         t = threading.Thread(target=run)
         t.start()
         self.addCleanup(lambda: t.join(5))
@@ -119,7 +132,7 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(self.service.broker.requests)
 
     def test_mismatched_profile_is_refused_before_native_execution(self):
-        set_session_vars(platform='photon', chat_type='dm', chat_id='synthetic-chat', user_id='synthetic-owner',
+        set_session_vars(platform=self.platform, chat_type='dm', chat_id=self.chat_id, user_id=self.user_id,
             session_key='synthetic-key', session_id='synthetic-session', profile='other-profile', cron_session='')
         called = []
         result = self.call(lambda a: called.append(a))
@@ -160,13 +173,13 @@ class BridgeTests(unittest.TestCase):
         denied(session_id='different-session')
         with delegated_child_context(): denied()
         for changes in ({'cron_session':'1'}, {'chat_type':'group'}, {'platform':'api_server'}, {'user_id':''}, {'session_id':''}):
-            values = dict(platform='photon', chat_type='dm', chat_id='synthetic-chat', user_id='synthetic-owner',
+            values = dict(platform=self.platform, chat_type='dm', chat_id=self.chat_id, user_id=self.user_id,
                 session_key='synthetic-key', session_id='synthetic-session', profile=profile_name_for_home(get_hermes_home()) or '', cron_session='')
             values.update(changes)
             contextvars.copy_context().run(lambda: (set_session_vars(**values), denied()))
         import os
-        env = {'HERMES_SESSION_'+key: value for key, value in dict(PLATFORM='photon', CHAT_TYPE='dm',
-            CHAT_ID='synthetic-chat', USER_ID='synthetic-owner', KEY='synthetic-key', ID='synthetic-session').items()}
+        env = {'HERMES_SESSION_'+key: value for key, value in dict(PLATFORM=self.platform, CHAT_TYPE='dm',
+            CHAT_ID=self.chat_id, USER_ID=self.user_id, KEY='synthetic-key', ID='synthetic-session').items()}
         with patch.dict(os.environ, env):
             contextvars.copy_context().run(lambda: (reset_session_vars(), denied()))
         self.service.bridge.isolation = 'host'
@@ -295,8 +308,8 @@ class BridgeTests(unittest.TestCase):
 
     def test_callback_handoff_rechecks_task_local_owner_not_process_env(self):
         import os
-        env = {'HERMES_SESSION_'+key: value for key, value in dict(PLATFORM='photon', CHAT_TYPE='dm',
-            CHAT_ID='synthetic-chat', USER_ID='synthetic-owner', KEY='synthetic-key', ID='synthetic-session').items()}
+        env = {'HERMES_SESSION_'+key: value for key, value in dict(PLATFORM=self.platform, CHAT_TYPE='dm',
+            CHAT_ID=self.chat_id, USER_ID=self.user_id, KEY='synthetic-key', ID='synthetic-session').items()}
         self.service.bridge.timeout = 0.01
         def consumer(args):
             prompt = unlock.get_code_prompt_callback()
@@ -357,13 +370,25 @@ class BridgeTests(unittest.TestCase):
         thread.start()
         self.assertTrue(ready.wait(5))
         async def send(**kwargs):
-            self.assertIs(asyncio.get_running_loop(), loop)
-            self.assertEqual(kwargs['chat_id'], 'synthetic-chat')
+            if self.platform == 'photon':
+                self.assertIs(asyncio.get_running_loop(), loop)
+            self.assertEqual(kwargs['chat_id'], self.chat_id)
             self.sent.append({'message':kwargs['content']})
             self.delivered.set()
             return SimpleNamespace(success=True, message_id='synthetic-message-id')
-        runner, adapter = SimpleNamespace(_gateway_loop=loop), SimpleNamespace(send=send)
-        platform = sender._platform_enum('photon')[0]
+        from gateway.config import GatewayConfig, PlatformConfig
+        from gateway.platforms.base import BasePlatformAdapter, SendResult
+        platform = sender._platform_enum(self.platform)[0]
+        class SyntheticNativeAdapter(BasePlatformAdapter):
+            async def connect(self, **kwargs): return True
+            async def disconnect(self): pass
+            async def get_chat_info(self, chat_id): return {'id': chat_id, 'type': 'dm'}
+            async def send(self, **kwargs):
+                result = await send(**kwargs)
+                return SendResult(success=result.success, message_id=result.message_id)
+        adapter = SyntheticNativeAdapter(PlatformConfig(enabled=True, token='SYNTHETIC-BOT-TOKEN'), platform)
+        runner = SimpleNamespace(_gateway_loop=loop)
+        config = GatewayConfig(platforms={platform: adapter.config})
         # The new relay egress guard imports the live gateway reference. Provide
         # an actual synthetic native adapter there; never import gateway.run's
         # launcher, which may relaunch this test process into the selected env.
@@ -382,8 +407,9 @@ class BridgeTests(unittest.TestCase):
         def consumer(args):
             self.assertEqual(unlock.get_code_prompt_callback()('synthetic.example', ''), 'SYNTHETIC-TRANSPORT-CODE')
             return json.dumps({'success':True})
+        from native_transport import synthetic_bot_network
         try:
-            with patch.dict(sys.modules, {'gateway.run': gateway_run}), patch.object(sender, '_resolve_tool_target', return_value=('photon', 'synthetic-chat', None, None)), patch('gateway.config.load_gateway_config', return_value=SimpleNamespace()), patch.object(sender, '_resolve_platform_config', return_value=(platform, SimpleNamespace(token=None), None, None)), patch.object(sender, '_live_adapter', return_value=(runner, adapter)), patch.object(sender, '_mirror_sent_message', return_value=False):
+            with synthetic_bot_network(self.platform, adapter.send), patch.dict(sys.modules, {'gateway.run': gateway_run}), patch('gateway.config.load_gateway_config', return_value=config), patch.object(sender, '_mirror_sent_message', return_value=False):
                 t, results, errors = self.worker(lambda: self.call(consumer))
                 self.assertTrue(self.delivered.wait(8), str(dispatched) + str(results) + str(errors))
                 self.assertTrue(t.is_alive())
@@ -403,7 +429,7 @@ class BridgeTests(unittest.TestCase):
         from secure_entry.native import dispatch_message
         ctx = SimpleNamespace(dispatch_tool=Mock(return_value=json.dumps({'success':False})))
         with patch('tools.registry.registry.get_entry', return_value=object()), patch('tools.send_message_tool.send_message_tool') as direct:
-            result = dispatch_message(ctx, 'send_message', {'action':'send', 'target':'photon:synthetic-chat', 'message':'synthetic only'})
+            result = dispatch_message(ctx, 'send_message', {'action':'send', 'target':self.platform + ':' + self.chat_id, 'message':'synthetic only'})
             self.assertFalse(json.loads(result)['success'])
             ctx.dispatch_tool.assert_called_once()
             direct.assert_not_called()
@@ -504,4 +530,55 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('Website password', page)
         self.assertEqual(json.loads(results[0])['status'], 'unlocked')
         self.assertEqual(self.service.broker.status(token)['status'], 'unlocked')
+
+    def check_relay_egress_decline_revokes_link_without_transport_send(self):
+        import sys
+        from types import ModuleType, SimpleNamespace
+        from gateway.config import GatewayConfig, Platform, PlatformConfig
+        from secure_entry.native import dispatch_message
+        platform = Platform(self.platform)
+        gateway_run = ModuleType('gateway.run')
+        relay = SimpleNamespace(fronts_platform=lambda p: p == platform)
+        runner = SimpleNamespace(adapters={Platform.RELAY:relay})
+        gateway_run._gateway_runner_ref = lambda: runner
+        config = GatewayConfig(platforms={platform:PlatformConfig(enabled=True, token='SYNTHETIC-TOKEN')})
+        self.service.bridge.dispatch = lambda name, args: dispatch_message(self.ctx, name, args)
+        def consumer(args):
+            self.assertIsNone(unlock.get_code_prompt_callback()('synthetic.example', ''))
+            return json.dumps({'success':False})
+        from tools import send_message_tool as sender
+        with patch.dict(sys.modules, {'gateway.run':gateway_run}), patch('gateway.config.load_gateway_config', return_value=config), patch.object(sender, '_send_to_platform') as transport:
+            result = json.loads(self.call(consumer))
+            transport.assert_not_called()
+        self.assertEqual(result['status'], 'cancelled')
+        self.assertFalse(self.sent)
+        self.assertTrue(self.service.broker.requests)
+        self.assertTrue(all(r.status == 'cancelled' for r in self.service.broker.requests.values()))
+
+    def test_model_destination_cannot_redirect_bound_prompt(self):
+        def consumer(args):
+            self.assertEqual(unlock.get_code_prompt_callback()('synthetic.example', ''), 'SYNTHETIC-BOUND-CODE')
+            return json.dumps({'success': True})
+        t, results, errors = self.worker(lambda: self.call(consumer, args={
+            'target':'telegram:999999999', 'destination':'discord:999999999', 'username':'untrusted-name'}))
+        token, _ = self.post('SYNTHETIC-BOUND-CODE')
+        t.join(5)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.sent[0]['target'], self.platform + ':' + self.chat_id)
+        self.assertEqual(json.loads(results[0])['status'], 'filled')
+
+    def test_callback_cannot_handoff_from_another_supported_platform(self):
+        def consumer(args):
+            prompt = unlock.get_code_prompt_callback()
+            def wrong_platform():
+                set_session_vars(platform='telegram' if self.platform != 'telegram' else 'discord',
+                    chat_type='dm', chat_id=self.chat_id, user_id=self.user_id,
+                    session_key='synthetic-key', session_id='synthetic-session',
+                    profile=profile_name_for_home(get_hermes_home()) or '', cron_session='')
+                self.assertIsNone(prompt('synthetic.example', ''))
+            contextvars.copy_context().run(wrong_platform)
+            return json.dumps({'success':False})
+        self.call(consumer)
+        self.assertFalse(self.sent)
+        self.assertFalse(self.service.broker.requests)
 

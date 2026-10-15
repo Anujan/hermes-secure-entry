@@ -1,5 +1,4 @@
 """In-process native prompt bridge. No browser injector or approval overrides."""
-import contextvars
 import json
 import threading
 from .native import MissingSessionID, MissingSessionBinding, owner
@@ -12,19 +11,10 @@ class Bridge:
         self.timeout = 180
 
     def bound_owner(self, context):
-        # get_session_env alone has a legacy process-env fallback. Require real
-        # task-local bindings from the post-auth gateway tool worker as well.
+        # Shared owner admission also fences metadata tools and add-login.
         bound = owner(self.service.home)
-        local = {v.name: value for v, value in contextvars.copy_context().items()}
-        for key, value in zip(('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'), bound[1:]):
-            if local.get('HERMES_SESSION_' + key) != value:
-                raise MissingSessionBinding('missing task-local identity')
         if not context.get('session_id') or context['session_id'] != bound[-1]:
             raise ValueError('session correlation mismatch')
-        from hermes_constants import profile_name_for_home
-        expected_profile = profile_name_for_home(self.service.home)
-        if local.get('HERMES_SESSION_PROFILE', '') not in ('', expected_profile):
-            raise ValueError('profile mismatch')
         if self.isolation != 'in_process':
             raise ValueError('in-process callbacks required')
         return bound
@@ -138,7 +128,7 @@ class Bridge:
                 import secrets
                 service.ids = {rid: item for rid, item in service.ids.items() if item[0] in broker.requests}
                 service.ids[secrets.token_hex(16)] = (request.token, bound)
-            sent = self.dispatch('send_message', {'action': 'send', 'target': 'photon:' + bound[3],
+            sent = self.dispatch('send_message', {'action': 'send', 'target': bound[1] + ':' + bound[3],
                 'message': 'Private native ' + kind + ' entry (expires in 180 seconds): ' + broker.url(request)})
             sent = json.loads(sent) if isinstance(sent, str) else sent
             if not isinstance(sent, dict) or sent.get('success') is not True:

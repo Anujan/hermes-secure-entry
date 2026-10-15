@@ -2,11 +2,11 @@
 
 A separate Windows-native Hermes plugin for private, one-use credential-entry pages reached through Tailscale Serve. It registers tools and lifecycle hooks through `PluginContext`; it does not modify Hermes core.
 
-**Version 0.2.1 is a preview/testing implementation.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms in an authorized Photon DM. OTP uses the existing native browser handler and its protections; this is not a new browser injector or a fix for native tab selection. Atomic update, sign-in-once, and save-and-sign-in remain unsupported before collection. Real Photon delivery, physical Safari/VoiceOver, real manager unlock, and browser authentication have not been verified. See [native compatibility and limits](docs/native-contract.md).
+**Version 0.3.0 is a preview implementation for authorized Photon, Discord, and Telegram DMs.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms. Photon add-login, OTP delivery and an authenticated browser page were operator-verified on installed 0.2.1; **Discord and Telegram have synthetic integration tests only**, pending user-initiated live DMs after activation. Real manager unlock and comprehensive physical Safari/VoiceOver testing remain unverified. OTP keeps the native browser protections; no new injector or tab-selection fix is supplied. Atomic update, sign-in-once, and save-and-sign-in remain unsupported. See the [tested versus live-verified platform matrix](docs/platforms.md) and [native limits](docs/native-contract.md).
 
 ## What works
 
-- `secure_entry_request(operation="add_login", origin="https://example.com")` in an originating Photon **DM** creates a ten-minute, 256-bit bearer link. Return that link only in that conversation.
+- `secure_entry_request(operation="add_login", origin="https://example.com")` in an originating Photon, Discord, or Telegram **DM** creates a ten-minute, 256-bit bearer link. Return that link only in that conversation.
 - The page explicitly names the exact website origin and says it will save a **new** native vault item, not sign in. The username is visible metadata; the password is not returned to the tool/model.
 - On submission, the native `VaultStore.add_item` encrypts the login. The plugin reads back metadata only before reporting `saved`. If the native write outcome cannot be verified, `commit_unknown` preserves returned handle metadata when available: inspect the vault before retrying to avoid duplicates.
 - `secure_entry_status(request_id)` and `secure_entry_cancel(request_id)` require the same home, platform, sender, chat, session key, and session ID. Delivered lifecycle stop/reset/abnormal-end hooks and plugin unload cancel pending entries; normal turn completion preserves the delivered link. **Idle `/stop` does not reliably revoke a delivered link**: the host emits no stop lifecycle hook when no agent is running. Use the form's **Cancel** button or `secure_entry_cancel(request_id)` in the originating session. Do not rely on idle `/stop`.
@@ -66,7 +66,7 @@ hermes config set plugins.entries.secure-entry.settings.port 8769
 
 No hostnames, addresses, accounts, or personal paths ship in this repository. Bind host is not configurable. The operator must inspect current Serve configuration, preserve unrelated ports/routes, and explicitly authorize the dedicated route. **Never use Tailscale Funnel** or another public proxy. All tailnet devices permitted to reach this service are inside the trust boundary; use Tailscale ACLs. Anyone possessing the link on an allowed device can submit it. The plugin does not claim separate sender authentication in Safari.
 
-`GET /health` returns only `{"status":"ok","version":"0.2.1"}`. The listener is lazy: before a request or explicit demo starts it, a refused health connection is expected.
+`GET /health` returns only `{"status":"ok","version":"0.3.0"}`. The listener is lazy: before a request or explicit demo starts it, a refused health connection is expected.
 
 Root `/r/<token>` paths avoid Serve-prefix ambiguity. Prefix-mounted URLs are rejected; do not deploy with prefix stripping or rewriting. No unrelated route needs modification.
 
@@ -107,6 +107,8 @@ Build an isolated test environment using Hermes's documented PM workflow, outsid
 ```bash
 # Run from the Hermes source checkout, using its prepared Python 3.14:
 python -m pm.build_env --source . --out /absolute/scratch/secure-entry-env --group dev --group test
+# Optional native bot SDKs for synthetic transport tests, in this test environment only:
+uv pip install --python /absolute/scratch/secure-entry-env/Scripts/python.exe aiohttp python-telegram-bot discord.py
 # From this plugin repository, with both repositories on PYTHONPATH:
 # Windows uses ; between native forward-slash paths; POSIX uses :.
 PYTHONPATH='/absolute/hermes-source;/absolute/hermes-secure-entry' /absolute/scratch/secure-entry-env/Scripts/python.exe -m unittest discover -s tests -v
