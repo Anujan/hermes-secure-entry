@@ -1,0 +1,35 @@
+name: Synthetic native-vault tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 7bf3766f3db72d4643d1a78d18e51c1d9ddf1d6d
+          path: hermes
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v6
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build isolated native test environment through PM
+        shell: bash
+        working-directory: hermes
+        run: python -m pm.build_env --source . --out "$GITHUB_WORKSPACE/test-env" --group dev --group test
+      - name: Test synthetic HTTP and native encrypted vault
+        shell: bash
+        working-directory: plugin
+        env:
+          HERMES_HOME: ${{ runner.temp }}/secure-entry-test-home
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE/hermes;$GITHUB_WORKSPACE/plugin"
+          "$GITHUB_WORKSPACE/test-env/Scripts/python.exe" -m unittest discover -s tests -v

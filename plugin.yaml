@@ -1,0 +1,25 @@
+name: secure-entry
+version: 0.1.0
+description: Private one-use Photon forms for adding native encrypted vault logins; browser prompts fail closed pending stronger native binding APIs.
+license: MIT
+requires_hermes: ">=0.21.5,<0.22.0"
+provides_tools:
+  - secure_entry_request
+  - secure_entry_status
+  - secure_entry_cancel
+provides_hooks:
+  - agent_loop_stopped
+  - on_session_end
+  - on_session_reset
+python_dependencies: []
+capabilities: []
+tags: [security, vault, photon, windows, accessibility]
+config_schema:
+  public_base_url:
+    type: str
+    default: https://example.invalid:9443
+    description: Trusted Tailscale Serve HTTPS origin; use a dedicated port. Never use Funnel.
+  port:
+    type: int
+    default: 8769
+    description: IPv4 loopback listener port. Host is fixed at 127.0.0.1.

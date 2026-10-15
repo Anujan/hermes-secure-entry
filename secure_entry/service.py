@@ -1,0 +1,117 @@
+"""Plugin service: native encrypted vault ADD only until stronger host APIs exist.
+
+Unsupported operations fail before creating a request or accepting credentials.
+No callbacks are installed to pretend a native browser target binding exists.
+"""
+import json
+import secrets
+import threading
+from .broker import Broker
+from .server import Server
+from .native import add_login, owner, validate_origin
+
+BLOCKERS = {
+    'update_login': 'Native VaultStore exposes add/remove, but no public atomic same-record update API. Existing records are not deleted.',
+    'sign_in_once': 'Native save-login prompt always persists before fill; no supported transient native password-entry API exists.',
+    'save_and_sign_in': 'Native save-login callback has origin/label only and fill can reselect a same-origin tab. No exact target/frame/generation binding contract.',
+    'verification_code': 'Native code prompt has site/hint only. Native OTP nonce fences DOM controls, but no public request binding covers exact target/frame/generation and ambiguous tabs.',
+}
+
+
+class Service:
+    def __init__(self, public_base_url, home, port=8769, store_factory=None):
+        self.broker = Broker(public_base_url)
+        self.home, self.port, self.store_factory = home, port, store_factory
+        self.server = None
+        self.ids = {}
+        self.lock = threading.RLock()
+        self.generation = 0
+        self.closed = False
+
+    def request(self, args, **kwargs):
+        try:
+            # Fence even owner/store acquisition, which can block before indexing.
+            with self.lock:
+                if self.closed:
+                    return json.dumps({'status':'unavailable'})
+                generation = self.generation
+            bound = owner(self.home)
+            operation = args.get('operation', 'add_login')
+            if operation in BLOCKERS:
+                return json.dumps({'status':'unsupported_native_contract', 'operation':operation, 'reason':BLOCKERS[operation]})
+            if operation != 'add_login':
+                return json.dumps({'status':'invalid_operation'})
+            origin = validate_origin(args.get('origin', ''))
+            from agent.vault_store import get_vault_store
+            # Resolve the profile-scoped native object HERE, not on an unrelated HTTP thread.
+            store = self.store_factory() if self.store_factory else get_vault_store()
+            with self.lock:
+                if self.closed or generation != self.generation:
+                    return json.dumps({'status':'cancelled'})
+                if self.server is None:
+                    self.server = Server(self.broker, port=self.port).__enter__()
+                request = self.broker.issue('login', origin, bound, lambda fields: add_login(store, origin, fields))
+                with self.broker.lock:
+                    self.ids = {rid: item for rid, item in self.ids.items() if item[0] in self.broker.requests}
+                request_id = secrets.token_hex(16)
+                self.ids[request_id] = (request.token, bound)
+            return json.dumps({'status':'pending', 'request_id':request_id, 'url':self.broker.url(request),
+                               'origin':origin, 'operation':'add_login', 'expires_in_seconds':600,
+                               'instruction':'Send this one-use link only in this originating conversation. The page saves a new native vault item; it does not sign in.'})
+        except Exception:
+            return json.dumps({'status':'unavailable', 'reason':'Requires a bound human Photon DM, a valid exact HTTPS origin, and an available loopback listener.'})
+
+    def status(self, args, **kwargs):
+        try:
+            bound = owner(self.home)
+            with self.lock:
+                token, expected = self.ids.get(args.get('request_id', ''), ('', None))
+            return json.dumps(self.broker.status(token) if expected == bound else {'status':'unavailable'})
+        except Exception:
+            return json.dumps({'status':'unavailable'})
+
+    def cancel(self, args, **kwargs):
+        try:
+            bound = owner(self.home)
+            with self.lock:
+                token, expected = self.ids.get(args.get('request_id', ''), ('', None))
+            if expected != bound:
+                return json.dumps({'status':'unavailable'})
+            with self.broker.lock:
+                if self.broker.status(token)['status'] == 'pending':
+                    self.broker.finish(token, 'cancelled')
+            return json.dumps(self.broker.status(token))
+        except Exception:
+            return json.dumps({'status':'unavailable'})
+
+    def ended(self, turn_id='', completed=False, failed=False, interrupted=False, **kwargs):
+        # Hermes currently also emits on_session_end after EACH normal message.
+        # These links must survive delivery of that message to the user.
+        if turn_id and completed and not failed and not interrupted:
+            return
+        self.stopped(**kwargs)
+
+    def reset(self, old_session_id='', session_id='', **kwargs):
+        # /new reports session_id=NEW; invalidate the OLD owner, not the new one.
+        self.stopped(session_id=old_session_id or session_id, **kwargs)
+
+    def stopped(self, session_key='', session_id='', **kwargs):
+        # The core emits these hooks, not model arguments or arbitrary inbound text.
+        with self.lock:
+            # Conservatively refuse all in-flight admissions on a lifecycle event;
+            # indexed requests remain scoped to the specified owner. No tombstone leak.
+            self.generation += 1
+            owners = {bound for _, bound in self.ids.values()
+                      if (session_key and bound[-2] == session_key) or (session_id and bound[-1] == session_id)}
+            for bound in owners:
+                self.broker.cancel_owner(bound)
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            self.generation += 1
+            if self.server:
+                self.server.close()
+                self.server = None
+            else:
+                self.broker.close()
