@@ -6,13 +6,24 @@ Secure Entry enumerates **Photon, Discord, Telegram** only. This is not an all-p
 
 | Surface | Add-login / status / cancel | Native OTP / unlock / lifecycle | Native send path | Real-site evidence |
 |---|---|---|---|---|
-| Photon DM | Synthetic native encrypted-vault tests | Synthetic HTTP + registered native tools | Native target resolution and synthetic native adapter on gateway loop | Operator verified add-login, native OTP callback delivery, and an authenticated browser page with 0.2.1; 0.3.0 is not yet activated |
-| Discord DM | Synthetic native-vault and owner-isolation tests | Same callback suite as Photon | Real native send function, numeric channel resolution, egress guard and Discord standalone REST sender; HTTP session replaced by a synthetic transport | **Not live verified**; user must initiate an authorized DM after activation |
+| Photon DM | Synthetic native encrypted-vault tests | Synthetic HTTP + registered native tools | Native target resolution and synthetic native adapter on gateway loop | Operator verified add-login, native OTP callback delivery, and an authenticated browser page with 0.2.1; not a separate live revalidation of Photon on 0.3.0 |
+| Discord DM | Synthetic native-vault and owner-isolation tests | Same callback suite as Photon | Real native send function, numeric channel resolution, egress guard and Discord standalone REST sender; HTTP session replaced by a synthetic transport in tests | **Operator-reported live verification succeeded** with 0.3.0 and patched Hermes core, including the additional numbered-widget fix in #139405; not stock-core or all-site verification |
 | Telegram DM | Synthetic native-vault and owner-isolation tests | Same callback suite as Photon | Real native send function, numeric chat resolution, egress guard and Telegram one-shot sender; Bot network boundary replaced by a synthetic transport | **Not live verified**; user must initiate an authorized DM after activation |
 | Slack, Signal, WhatsApp, Matrix, other messaging | Rejected | Rejected | Not enabled by this release | Not verified |
 | Groups, channels, threads, forums, unknown, cron, API/headless, delegated children | Rejected | Rejected | No prompt delivery | Not supported |
 
-No real manager unlock, comprehensive physical Safari/VoiceOver evaluation, or live Discord/Telegram login is claimed. `filled` remains a native fill result, not authentication. Live Photon evidence belongs to the previous installed revision, not proof that this staged revision is running.
+No real manager unlock, comprehensive physical Safari/VoiceOver evaluation, or live Telegram login is claimed. `filled` remains a native fill result, not authentication. Live Photon evidence belongs to the previous installed revision. Discord's live result is operator-reported, separate from synthetic test results and from proof that an arbitrary reader's installation is active.
+
+## Stock versus patched Hermes core
+
+Stock **Hermes 0.22.1** supports this bridge on code forms that its native detector selects and recognizes. Add-login does not depend on the following OTP fixes. Both linked core PRs are **open/pending**, not bundled by this plugin and not universal prerequisites:
+
+- [#136831: visible OTP fields on bound login origins](https://github.com/NousResearch/hermes-agent/pull/136831) fixes wrong-tab selection caused by unrelated hidden postal/country-code controls and uses a saved handle's allowed origins when core receives one. The plugin continues to refuse nonempty OTP handles; this fix does not remove that preview restriction or the remaining immutable-target limitations.
+- [#139405: digit-count labels and numbered OTP widgets](https://github.com/NousResearch/hermes-agent/pull/139405) adds explicit “enter [the/a] [4–8] digit code” label recognition and complete ordered, adjacent 1..N positional groups of 4–8 digits sharing actual form/container identity. It refuses malformed/incomplete/mixed groups and unrelated fields. The updated PR records **127 focused tests passing on Windows** and a live United challenge completed through native private entry and Continue to the authenticated account menu. These are core-fix results, not the plugin suite's test count.
+
+The operator reports that live Discord verification worked after the additional fix in #139405. This supports a live Discord result with patched core, not a promise that all sites work on stock 0.22.1 or that every deployment needs both PRs. Telegram remains synthetic-tested only. Native inspection must recognize the actual page before any OTP collector is armed; the bridge does not replace that inspection.
+
+Installation uses the supported [direct GitHub CLI procedure](../README.md#direct-github-install-supported-hermes-cli). It still requires `plugins.isolation: in_process`, separately configured Tailscale Serve forwarding a dedicated HTTPS root unchanged to loopback, an authorized tailnet client, and coordinated gateway/new-conversation activation. GitHub install/enable alone supplies none of the site-specific core fixes and does not create the Tailscale route.
 
 ## Inspected native source contract
 
@@ -36,4 +47,4 @@ Tests use disposable native encrypted vaults, native ContextVars, a synthetic Ba
 
 Optional `aiohttp`, `python-telegram-bot` and `discord.py` SDKs are installed **only in the isolated test environment** for native transport coverage, not declared as new plugin dependencies or installed into the live host.
 
-Stage an immutable payload and coordinate a gateway stop, supported plugin update/install, doctor/validation, then restart. Never overwrite an active installed middleware copy. No config change, restart, or live installed-plugin synchronization is part of preparing this release. After activation, the user should initiate a DM on each platform; test real link delivery, cancellation, form submission and browser/account outcome before labeling that platform live verified. Do not test by unsolicited messages or by posting links publicly.
+Stage an immutable payload and coordinate a gateway stop, supported plugin update/install, doctor/validation, then restart. Never overwrite an active installed middleware copy. This documentation update performs no config change, restart, or live installed-plugin synchronization. After activation, the user should initiate a DM on each platform; test real link delivery, cancellation, form submission and browser/account outcome before labeling that deployment live verified. The operator-reported Discord result above does not establish every cancellation/unlock/device scenario. Do not test by unsolicited messages or by posting links publicly.

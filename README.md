@@ -2,7 +2,7 @@
 
 A separate Windows-native Hermes plugin for private, one-use credential-entry pages reached through Tailscale Serve. It registers tools and lifecycle hooks through `PluginContext`; it does not modify Hermes core.
 
-**Version 0.3.0 is a preview implementation for authorized Photon, Discord, and Telegram DMs.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms. Photon add-login, OTP delivery and an authenticated browser page were operator-verified on installed 0.2.1; **Discord and Telegram have synthetic integration tests only**, pending user-initiated live DMs after activation. Real manager unlock and comprehensive physical Safari/VoiceOver testing remain unverified. OTP keeps the native browser protections; no new injector or tab-selection fix is supplied. Atomic update, sign-in-once, and save-and-sign-in remain unsupported. See the [tested versus live-verified platform matrix](docs/platforms.md) and [native limits](docs/native-contract.md).
+**Version 0.3.0 is a preview implementation for authorized Photon, Discord, and Telegram DMs.** It adds native encrypted vault logins and bridges native OTP and password-manager unlock callbacks to private forms. Photon add-login, OTP delivery and an authenticated browser page were operator-verified on installed 0.2.1; **the operator now reports successful live Discord verification with the patched Hermes core described below**. Telegram has synthetic integration tests only, not live verification. Real manager unlock and comprehensive physical Safari/VoiceOver testing remain unverified. OTP keeps the native browser protections; no new injector or core detector/tab-selection fix is bundled. Atomic update, sign-in-once, and save-and-sign-in remain unsupported. See the [tested versus live-verified platform matrix](docs/platforms.md), [core-fix scope](#related-hermes-core-fixes), and [native limits](docs/native-contract.md).
 
 ## What works
 
@@ -35,7 +35,26 @@ Requires `plugins.isolation: in_process`. The bridge refuses host isolation, cro
 
 ## Install and activation
 
-Python requirements are supplied by Hermes. The plugin declares no additional Python dependencies. Use the PM-prepared Hermes interpreter, not an unrelated system Python and not raw pip against the live runtime.
+Use **Hermes 0.22.1**; the manifest is bounded to `>=0.22.1,<0.22.2`. Python requirements are supplied by Hermes. The plugin declares no additional Python dependencies. Use the PM-prepared Hermes interpreter, not an unrelated system Python and not raw pip against the live runtime.
+
+### Direct GitHub install (supported Hermes CLI)
+
+For a fresh install in the intended active profile, coordinate a gateway stop before installing/enabling middleware, then run:
+
+```bash
+hermes plugins install mforzano/hermes-secure-entry --yes-deps --enable
+hermes config set plugins.isolation in_process
+hermes config set plugins.entries.secure-entry.settings.public_base_url https://your-machine.example-tailnet.ts.net:9443
+hermes config set plugins.entries.secure-entry.settings.port 8769
+hermes plugins doctor secure-entry --ci
+hermes plugins capabilities secure-entry
+```
+
+The supported CLI accepts `owner/repo` directly; `--yes-deps` supplies dependency-preparation consent and `--enable` requests enablement. This is a direct GitHub install, not a claim of reviewed catalog admission. For a reproducible install, add `--ref` with a full immutable 40-character commit SHA.
+
+**GitHub installation alone does not configure Tailscale Serve, select `in_process` isolation, or guarantee that every website's OTP form will work.** Configure the [dedicated tailnet-only HTTPS route](#tailscale-deployment-operator-owned) separately, preserve unrelated routes, and ensure the client device has authorized tailnet access. The settings above do not create that route. Then start a new gateway process and a new conversation; enablement alone is not verified activation. For an existing installation, coordinate unloading/stopping the running middleware before a supported update/reinstall; never overwrite its active copy. See [core-fix scope](#related-hermes-core-fixes) for affected native OTP detection/selection failures.
+
+### Alternative: stage from source
 
 From the source repository, in an environment where `import hermes_constants` resolves to your Hermes checkout:
 
@@ -51,9 +70,18 @@ hermes plugins enable secure-entry --no-allow-tool-override
 hermes plugins capabilities secure-entry
 ```
 
-Or add `--enable` to the installation command. There is no tool-override grant. Plugin capability declarations are empty because it requests none of Hermes's capability-gated host facades; enabling it still trusts in-process native vault writes, native direct-message dispatch and the local listener. **A separately coordinated gateway restart/new process and new conversation are required. The installer does not restart anything.** Do not overwrite an active installed copy: middleware/hooks can hotload into existing sessions even when tool schemas are deferred. This release does not claim a safe live new-session-only activation gate.
+Or add `--enable` to the source staging command. Set `plugins.isolation` to `in_process` and configure the separate Tailscale Serve route as above. There is no tool-override grant. Plugin capability declarations are empty because it requests none of Hermes's capability-gated host facades; enabling it still trusts in-process native vault writes, native direct-message dispatch and the local listener. **A separately coordinated gateway restart/new process and new conversation are required. The installer does not restart anything.** Do not overwrite an active installed copy: middleware/hooks can hotload into existing sessions even when tool schemas are deferred. This release does not claim a safe live new-session-only activation gate.
 
 `HERMES_HOME/plugins` survives normal Hermes updates; never put this plugin in the core checkout. This release is constrained to `>=0.22.1,<0.22.2`: the tested Hermes 0.22.1 consolidated vault-action contract, not a blanket promise about future releases. Rerun doctor and tests after host updates. It has no self-updater or dependency mutation path. See [the compatibility evidence and coordinated activation procedure](docs/hermes-0.22.1.md). Do not copy this upgrade over a running gateway's installed middleware.
+
+## Related Hermes core fixes
+
+**Stock Hermes 0.22.1 can use this bridge for OTP forms that its native detector selects and recognizes. Neither pending PR is a universal prerequisite, and add-login is independent of these OTP fixes.** The plugin transports native prompts; it does not patch browser selection or field recognition. Affected sites/widgets can need the corresponding core fix:
+
+- [NousResearch/hermes-agent #136831](https://github.com/NousResearch/hermes-agent/pull/136831) — **open/pending**: selects visible OTP fields and, when a saved login handle is supplied to core, binds selection to that handle's allowed origins. It addresses false `no_code_field` failures caused by unrelated tabs with hidden postal/country-code controls. This plugin's preview still refuses nonempty OTP handles; the PR does not enable them here or establish immutable target binding.
+- [NousResearch/hermes-agent #139405](https://github.com/NousResearch/hermes-agent/pull/139405) — **open/pending**: recognizes explicit “enter [the/a] [4–8] digit code” labels and complete, ordered, adjacent 1..N numbered OTP widgets (4–8 digits), with shared actual form/container identity. Invalid/incomplete/mixed groups and unrelated code-like fields are rejected. The updated PR reports 127 focused tests passing on Windows and a real United six-box challenge filled through native private entry; Continue reached the authenticated account menu. That is patched-core evidence, not stock 0.22.1 coverage or proof of all sites.
+
+The operator's successful live Discord verification used patched core, including the additional numbered-widget fix in #139405. Do not infer that both PRs must be applied for every use, that they are merged into stock Hermes, or that Telegram is live verified. See the [platform evidence and stock-versus-patched limits](docs/platforms.md).
 
 ## Tailscale deployment (operator-owned)
 
