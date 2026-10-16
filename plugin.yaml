@@ -2,7 +2,7 @@ name: secure-entry
 version: 0.3.0
 description: Preview private Photon, Discord and Telegram DM forms for native vault login adds and scoped native OTP and manager unlock callbacks. In-process only.
 license: MIT
-requires_hermes: ">=0.22.1,<0.22.2"
+requires_hermes: ">=0.22.1,<0.23"
 provides_tools:
   - secure_entry_request
   - secure_entry_status
