@@ -15,7 +15,7 @@ from .payment_file import PrivateCard
 from .payment_browser import BindingRefused, Target
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.4.3"
+PAYMENT_DIAGNOSTIC_VERSION = "0.4.4"
 
 
 class RetrievalRefused(ValueError):
@@ -127,6 +127,7 @@ class LocalPayment:
             from tools.bot_desktop import lease
             from tools.interrupt import is_interrupted
             from tools.approval_prompt import request_elicitation_consent
+            from tools.approval_human_wait import human_wait_seconds
             from agent.redact import register_vault_redaction_value
 
             if (
@@ -164,14 +165,16 @@ class LocalPayment:
                 if (
                     self.service.closed
                     or self.service.generation != generation
-                    or time.monotonic() >= deadline
                     or is_interrupted()
                 ):
                     raise ValueError("operation_cancelled")
-                if (
-                    lease.assert_agent_may_act(str(self.service.home)).epoch
-                    != admitted.epoch
-                ):
+                if time.monotonic() >= deadline:
+                    raise ValueError("operation_timeout")
+                try:
+                    epoch = lease.assert_agent_may_act(str(self.service.home)).epoch
+                except Exception:
+                    raise ValueError("takeover_refused") from None
+                if epoch != admitted.epoch:
                     raise ValueError("takeover_refused")
                 if capture is not None and not capture.is_valid():
                     raise ValueError("browser_capture_invalid")
@@ -182,7 +185,7 @@ class LocalPayment:
                     raise ValueError("owner_changed")
 
             def operation():
-                nonlocal target, card, stage, capture
+                nonlocal target, card, stage, capture, deadline
                 current()
                 capture = SUPERVISOR_REGISTRY.capture(task)
                 current()
@@ -191,6 +194,8 @@ class LocalPayment:
                     capture, args["parent"], args["frame"], merchant, provider, guard
                 )
                 stage = "native_consent"
+                wait_before = human_wait_seconds(bound[-2])
+                consent_started = time.monotonic()
                 # Genuine existing native surface; no approval callbacks installed
                 # or forged. Photon/gateway notification belongs to the host.
                 verdict = request_elicitation_consent(
@@ -200,9 +205,17 @@ class LocalPayment:
                     surface="vault-payment",
                     title="Confirm local Link card fill?",
                 )
+                # Credit only host-recorded, bounded human waiting during this
+                # actual native consent call, never arbitrary wall-clock stalls.
+                deadline += min(
+                    max(0, time.monotonic() - consent_started),
+                    max(0, human_wait_seconds(bound[-2]) - wait_before),
+                )
                 if verdict != "accept":
                     return {"success": False, "status": "payment_declined"}
+                stage = "postconsent_current"
                 current()
+                stage = "postconsent_target"
                 target.check()
                 stage = "private_inbox"
                 root = Path(self.service.home) / "cache"
@@ -251,7 +264,17 @@ class LocalPayment:
                 diagnostic = {"refusal": exc.category}
             elif stage == "link_retrieval_producer":
                 diagnostic = {"refusal": "producer_failed"}
-            elif stage == "post_retrieval_current":
+            elif stage == "native_consent":
+                diagnostic = {
+                    "refusal": "consent_timeout"
+                    if isinstance(exc, TimeoutError)
+                    else "consent_failed"
+                }
+            elif stage in {
+                "post_retrieval_current",
+                "postconsent_current",
+                "postconsent_target",
+            }:
                 reason = (
                     exc.args[0]
                     if type(exc) is ValueError and len(exc.args) == 1
@@ -263,11 +286,16 @@ class LocalPayment:
                     and reason
                     in {
                         "operation_cancelled",
+                        "operation_timeout",
                         "takeover_refused",
                         "browser_capture_invalid",
                         "owner_changed",
                     }
-                    else "current_check_failed"
+                    else (
+                        "target_check_failed"
+                        if stage == "postconsent_target"
+                        else "current_check_failed"
+                    )
                 }
             elif stage == "post_retrieval_target_check":
                 diagnostic = {"refusal": "target_check_failed"}

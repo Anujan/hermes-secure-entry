@@ -15,13 +15,22 @@ import secrets
 # Generated fixed code runs only inside the registered native payment facility.
 # All authority is closure-private in a fresh isolated world, never DOM stamps.
 PARENT = r"""function(expected) {
- const doc=document, href=location.href, node=this, parent=node.parentNode;
+ const doc=document, href=location.href, node=this;
+ const lineage=[];
+ for(let e=node;e;e=e.parentNode)lineage.push(e);
+ if(node.tagName!=='IFRAME' || lineage[lineage.length-1]!==doc)throw Error('unsupported');
+ // Retain exact ancestry. Observe records, not just final state, so removal or
+ // security-attribute mutation followed by restoration remains a refusal.
+ const relevant=records=>records.some(r=>r.type==='attributes'
+   ? lineage.includes(r.target) && r.attributeName!=='title' && !r.attributeName.startsWith('aria-')
+   : Array.from(r.removedNodes).some(n=>lineage.includes(n)));
  let changed=false;
- const observer=new MutationObserver(()=>changed=true);
+ const observer=new MutationObserver(records=>{if(relevant(records))changed=true;});
  observer.observe(doc,{subtree:true,childList:true,attributes:true});
- return {valid(){if(observer.takeRecords().length)changed=true;
+ return {valid(){if(relevant(observer.takeRecords()))changed=true;
    return !changed && document===doc && location.href===href && location.origin===expected &&
-     node.isConnected && node.ownerDocument===doc && node.parentNode===parent;},
+     node.isConnected && lineage.every((e,i)=>e.ownerDocument===doc || e===doc) &&
+     lineage.every((e,i)=>e.parentNode===(lineage[i+1] || null));},
    close(){changed=true;observer.disconnect();}};
 }"""
 CHILD = r"""(() => {

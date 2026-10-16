@@ -25,7 +25,7 @@ class PaymentBrowserTests(unittest.TestCase):
             "https://merchant.test/**",
             lambda r: r.fulfill(
                 content_type="text/html",
-                body='<iframe src="https://provider.test/pay"></iframe>',
+                body='<main><section><iframe src="https://provider.test/pay"></iframe></section><aside>carousel</aside></main>',
             ),
         )
         self.context.route(
@@ -181,9 +181,62 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
-                    payment_diagnostic_version="0.4.3",
+                    payment_diagnostic_version="0.4.4",
                 ),
             )
+
+    def test_parent_unrelated_mutations_preserve_retained_iframe(self):
+        target = self.target_for_html(
+            '<form><input autocomplete="cc-number"><input autocomplete="cc-exp"></form>'
+        )
+        self.page.evaluate("""() => {
+            document.title='new title'; document.body.setAttribute('aria-busy','false');
+            document.querySelector('iframe').title='accessible payment';
+            document.querySelector('section').setAttribute('aria-label','Payment');
+            document.querySelector('aside').innerHTML='<article>next promotion</article>';
+            document.querySelector('main').appendChild(document.createElement('footer'));
+        }""")
+        other = self.context.new_page()
+        other.goto("https://merchant.test/other")
+        other.evaluate("document.body.appendChild(document.createElement('div'))")
+        target.check()
+        self.assertEqual(
+            target.fill(dict(number="4242424242424242", exp_month=12, exp_year=2030))[
+                "filled_fields"
+            ],
+            2,
+        )
+
+    def test_parent_lineage_security_mutations_are_sticky(self):
+        for change in (
+            "f.remove()",
+            "document.querySelector('aside').appendChild(f)",
+            "const p=f.parentNode; p.remove(); document.body.appendChild(p)",
+            "f.setAttribute('src', 'https://provider.test/changed'); f.setAttribute('src', 'https://provider.test/pay')",
+            "f.setAttribute('sandbox','allow-scripts'); f.removeAttribute('sandbox')",
+            "f.parentNode.setAttribute('inert',''); f.parentNode.removeAttribute('inert')",
+        ):
+            with self.subTest(change=change):
+                self.page.goto("https://merchant.test/")
+                self.page.frames[1].wait_for_load_state()
+                session = self.context.new_cdp_session(self.page)
+                root = session.send("DOM.getDocument")["root"]["nodeId"]
+                node = session.send(
+                    "DOM.querySelector", {"nodeId": root, "selector": "iframe"}
+                )["nodeId"]
+                self.frame = session.send("DOM.describeNode", {"nodeId": node})["node"][
+                    "frameId"
+                ]
+                self.page.frames[1].wait_for_load_state()
+                target = self.target_for_html(
+                    '<form><input autocomplete="cc-number"><input autocomplete="cc-exp"></form>'
+                )
+                self.page.evaluate(
+                    '() => {const f=document.querySelector("iframe"); ' + change + "}"
+                )
+                with self.assertRaises(ValueError):
+                    target.check()
+                target.close()
 
     def test_formless_cohesive_payment_widget(self):
         target = self.target_for_html(
@@ -363,7 +416,7 @@ class PaymentBrowserTests(unittest.TestCase):
 
         def invoke(sid, obj, function, args=()):
             if "this.write" in function:
-                self.page.evaluate("document.querySelector('iframe').title='changed'")
+                self.page.evaluate("document.querySelector('iframe').name='changed'")
             return real(sid, obj, function, args)
 
         target.invoke = invoke
@@ -420,7 +473,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 success=True,
                 status="filled",
                 filled_fields=4,
-                payment_diagnostic_version="0.4.3",
+                payment_diagnostic_version="0.4.4",
             ),
         )
         self.assertNotIn(
@@ -712,7 +765,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 "success": True,
                 "status": "filled",
                 "filled_fields": 4,
-                "payment_diagnostic_version": "0.4.3",
+                "payment_diagnostic_version": "0.4.4",
             },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
@@ -752,7 +805,8 @@ class PaymentBrowserTests(unittest.TestCase):
 
         result, _ = self._run_facility(before_answer=replace)
         self.assertFalse(result["success"])
-        self.assertEqual(result["stage"], "native_consent")
+        self.assertEqual(result["stage"], "postconsent_current")
+        self.assertEqual(result["refusal"], "browser_capture_invalid")
         self.assertEqual(
             self.page.frames[1].locator("[autocomplete=cc-number]").input_value(), ""
         )
@@ -765,7 +819,8 @@ class PaymentBrowserTests(unittest.TestCase):
             before_answer=lambda: lease.acquire("synthetic-viewer")
         )
         self.assertFalse(result["success"])
-        self.assertEqual(result["stage"], "native_consent")
+        self.assertEqual(result["stage"], "postconsent_current")
+        self.assertEqual(result["refusal"], "takeover_refused")
         self.assertEqual(
             self.page.frames[1].locator("[autocomplete=cc-number]").input_value(), ""
         )
@@ -798,7 +853,7 @@ class PaymentBrowserTests(unittest.TestCase):
             {
                 "success": False,
                 "status": "payment_declined",
-                "payment_diagnostic_version": "0.4.3",
+                "payment_diagnostic_version": "0.4.4",
             },
         )
         self.assertEqual(
@@ -812,7 +867,8 @@ class PaymentBrowserTests(unittest.TestCase):
             )
         )
         self.assertFalse(result["success"])
-        self.assertEqual(result["stage"], "native_consent")
+        self.assertEqual(result["stage"], "postconsent_target")
+        self.assertEqual(result["refusal"], "target_check_failed")
         self.assertEqual(
             self.page.frames[1].locator("[autocomplete=cc-number]").input_value(), ""
         )
@@ -852,7 +908,7 @@ class PaymentBrowserTests(unittest.TestCase):
         )
         self.addCleanup(target.close)
         self.page.evaluate(
-            "document.querySelector('iframe').setAttribute('title','changed');document.querySelector('iframe').removeAttribute('title')"
+            "document.querySelector('iframe').setAttribute('name','changed');document.querySelector('iframe').removeAttribute('name')"
         )
         with self.assertRaises(ValueError):
             target.check()

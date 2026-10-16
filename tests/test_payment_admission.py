@@ -95,13 +95,76 @@ class PaymentAdmissionTests(unittest.TestCase):
                 result = json.loads(raw)
                 self.assertEqual(result.get("stage"), expected_stage)
                 self.assertEqual(result.get("refusal"), expected_reason)
-                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.3")
+                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.4")
                 self.assertEqual(
                     result.get("subprocess_exit_status"),
                     7 if failure == "producer" else None,
                 )
                 self.assertNotIn("SYNTHETIC_PRIVATE", raw)
                 inbox.return_value.__enter__.return_value.consume.assert_not_called()
+
+    def test_consent_diagnostics_and_native_wait_accounting(self):
+        from types import SimpleNamespace
+
+        for failure, stage, reason in (
+            ("exception", "native_consent", "consent_failed"),
+            ("timeout", "native_consent", "consent_timeout"),
+            ("closed", "postconsent_current", "operation_cancelled"),
+            ("deadline", "postconsent_current", "operation_timeout"),
+            ("target", "postconsent_target", "target_check_failed"),
+            ("human_wait", "postconsent_target", "target_check_failed"),
+        ):
+            with self.subTest(failure=failure):
+                clock = [0.0]
+                waited = [0.0]
+
+                def consent(*a, **kw):
+                    if failure == "exception":
+                        raise RuntimeError("SYNTHETIC_PRIVATE")
+                    if failure == "timeout":
+                        raise TimeoutError("SYNTHETIC_PRIVATE")
+                    if failure == "closed":
+                        self.service.closed = True
+                    if failure in ("deadline", "human_wait"):
+                        clock[0] = 200.0
+                    if failure == "human_wait":
+                        waited[0] = 200.0
+                    return "accept"
+
+                target = SimpleNamespace(
+                    started=False,
+                    close=lambda: None,
+                    check=lambda: (_ for _ in ()).throw(
+                        ValueError("SYNTHETIC_PRIVATE")
+                    ),
+                )
+                with (
+                    patch(
+                        "secure_entry.payment.time.monotonic",
+                        side_effect=lambda: clock[0],
+                    ),
+                    patch(
+                        "tools.approval_human_wait.human_wait_seconds",
+                        side_effect=lambda *a: waited[0],
+                    ),
+                    patch(
+                        "tools.approval_prompt.request_elicitation_consent",
+                        side_effect=consent,
+                    ),
+                    patch(
+                        "tools.browser_supervisor.SUPERVISOR_REGISTRY.capture",
+                        return_value=SimpleNamespace(is_valid=lambda: True),
+                    ),
+                    patch("secure_entry.payment.Target", return_value=target),
+                    patch("secure_entry.payment.PrivateCard") as inbox,
+                ):
+                    raw = self.facility.fill(self.args, task_id="synthetic-payment")
+                self.service.closed = False
+                result = json.loads(raw)
+                self.assertEqual(result.get("stage"), stage)
+                self.assertEqual(result.get("refusal"), reason)
+                self.assertNotIn("SYNTHETIC_PRIVATE", raw)
+                inbox.assert_not_called()
 
     def test_existing_public_capture_needs_no_legacy_local_metadata(self):
         from types import SimpleNamespace

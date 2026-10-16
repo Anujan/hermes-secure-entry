@@ -52,6 +52,36 @@ passed, including actual multi-tab harness integration. Targeted Ruff checks,
 plugin doctor and all catalog checks passed. Catalog retains the existing
 private-core-import warning. No installation or live payment interaction ran.
 
+## Parent mutation scope and consent diagnostics (0.4.4)
+
+The parent guard retains the exact iframe, document and complete ancestor chain.
+Only records that remove a retained lineage node or change a non-`title`,
+non-`aria-*` attribute on that lineage invalidate it. This includes iframe
+`src`/`srcdoc`, `sandbox`, permissions, name, style/class and ancestor inert/hidden
+changes. Removal/reparenting and security mutation followed by restoration remain
+sticky refusals. Unrelated carousel subtree changes, sibling insertion, parent
+page title/ARIA changes and mutations in another page do not invalidate the
+retained iframe. Child field/document checks are unchanged.
+
+Failures distinguish `native_consent`, `postconsent_current` and
+`postconsent_target`. Fixed reasons include `consent_failed`, `consent_timeout`,
+`operation_cancelled`, `operation_timeout`, `takeover_refused`,
+`browser_capture_invalid`, `owner_changed`, `current_check_failed` and
+`target_check_failed`; no exception text is returned. The native host maps some
+internal timeouts/errors to a nonaccept verdict; these remain `payment_declined`
+rather than inventing a finer reason the host did not supply.
+
+The 180-second execution budget credits only the host's bounded recorded
+human-wait delta during the genuine native consent call, capped by that call's
+elapsed time. It does not exempt arbitrary stalls, extend the host approval
+policy, bypass consent or suppress postconsent lifecycle/owner/target checks.
+
+Targeted RED/GREEN exercised the unrelated-parent regression and consent
+stage/reason/deadline regression. Full suite: **181 tests passed in 114.826s**,
+including disposable real Chrome OOPIF mutation/revert and native consent tests;
+targeted Ruff passed. No live browser, wallet, credential, install or core change
+was used for this repair.
+
 ## Registered native facility
 
 `secure_entry_payment_fill(parent, frame, merchant_origin, frame_origin, spend_request_id)` accepts **metadata only**. The exact parent must exist on the native task supervisor's captured connection; the direct iframe must be owned by that parent. The authenticated same-profile supported DM, user/chat/session identity, native task and service lifecycle generation are checked. The existing public native capture pins the supervisor/WebSocket generation. No model-supplied endpoint, file path, script, selector, card or credential argument exists.
