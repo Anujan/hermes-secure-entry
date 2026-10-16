@@ -2,7 +2,7 @@
 
 Only native CapturedCDP handles; never endpoint discovery, page searching, main
 world injection, model JavaScript/selectors, or submission. Deliberately strict:
-one direct iframe, one ordinary form, standard payment/billing autocomplete.
+one direct iframe, one form or cohesive container, standard autocomplete.
 PAN/expiry/CVC must be empty; matching issued public billing stays private.
 Parent pre/post checks are not an atomic cross-document no-disclosure fence.
 Inspired by the reviewed secure-env-ingress design; no source copied (upstream
@@ -27,8 +27,18 @@ PARENT = r"""function(expected) {
 CHILD = r"""(() => {
  const doc=document, href=location.href, origin=location.origin;
  const forms=Array.from(doc.forms);
- if(forms.length!==1)throw Error('unsupported');
- const form=forms[0], fields=Array.from(form.elements);
+ if(forms.length>1)throw Error('unsupported');
+ const form=forms[0] || null;
+ const fields=Array.from(form ? form.elements : doc.querySelectorAll('input,select,textarea'));
+ // A null form owner alone is not a group. Retain the smallest common
+ // non-document container; sibling widgets joined only by body/html refuse.
+ let container=form || (fields[0] && fields[0].parentElement);
+ if(!form){
+   if(fields.some(e=>e.form!==null))throw Error('unsupported');
+   while(container && !fields.every(e=>container.contains(e)))container=container.parentElement;
+   if(!container || container===doc.body || container===doc.documentElement)throw Error('unsupported');
+ }
+ const parents=fields.map(e=>e.parentNode);
  const allowed=['cc-number','cc-exp','cc-exp-month','cc-exp-year','cc-csc','cc-name',
    'billing country','billing address-line1','billing address-line2','billing address-level2',
    'billing address-level1','billing postal-code','billing tel'];
@@ -49,7 +59,7 @@ CHILD = r"""(() => {
  observer.observe(doc,{subtree:true,childList:true,attributes:true,characterData:true});
  const valid=()=>{if(securityRecords(observer.takeRecords()))changed=true;
    return !changed && document===doc && location.href===href && location.origin===origin &&
-     form.isConnected && fields.every((e,i)=>e.isConnected && e.form===form && e.ownerDocument===doc && usable(e) && e.autocomplete===tokens[i]);};
+     container.isConnected && container.ownerDocument===doc && fields.every((e,i)=>e.isConnected && e.form===form && container.contains(e) && e.parentNode===parents[i] && e.ownerDocument===doc && usable(e) && e.autocomplete===tokens[i]);};
  const setters={INPUT:Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set,
    SELECT:Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set};
  return {valid, origin,
@@ -79,6 +89,14 @@ CHILD = r"""(() => {
 })()"""
 
 
+class BindingRefused(ValueError):
+    """Only fixed public categories; never forward CDP exceptions or DOM data."""
+
+    def __init__(self, category):
+        self.category = category
+        super().__init__("target_refused")
+
+
 class Target:
     def __init__(self, capture, parent, frame, merchant, provider, guard):
         self.capture, self.guard = capture, guard
@@ -89,12 +107,25 @@ class Target:
         self.objects = []
         self.group = "secure-entry-payment-" + secrets.token_hex(16)
         self.attached = False
+        self.parent_attached = False
         self.closed = False
         self.started = False
+        category = "selected_parent"
         try:
-            info = self.call("Target.getTargetInfo", {}, self.psid)["targetInfo"]
+            info = self.call("Target.getTargetInfo", {"targetId": parent})["targetInfo"]
             if info["targetId"] != parent or info["type"] != "page":
                 raise ValueError("target_refused")
+            default = self.call("Target.getTargetInfo", {}, self.psid)["targetInfo"]
+            if default["targetId"] != parent:
+                # Attach only this explicit page on the captured socket. No page
+                # enumeration, endpoint lookup, focus change or new browser.
+                self.psid = self.attach_frame(parent)
+                self.parent_attached = True
+                self.csid = self.psid
+            selected = self.call("Target.getTargetInfo", {}, self.psid)["targetInfo"]
+            if selected["targetId"] != parent or selected["type"] != "page":
+                raise ValueError("target_refused")
+            category = "frame_lineage"
             tree = self.call("Page.getFrameTree", {}, self.psid)["frameTree"]
             root = tree["frame"]["id"]
             owner = self.call("DOM.getFrameOwner", {"frameId": frame}, self.psid)[
@@ -126,17 +157,22 @@ class Target:
                 self.csid = self.attach_frame(frame)
                 self.attached = True
                 context = self.world(frame, self.csid)
+            category = "form_layout"
             self.cg = self.remote(
                 "Runtime.evaluate",
                 {"expression": CHILD, "contextId": context},
                 self.csid,
             )
+            category = "frame_lineage"
             if (
                 self.invoke(self.csid, self.cg, "function(){return this.origin;}")
                 != provider
             ):
                 raise ValueError("target_refused")
             self.check()
+        except Exception:
+            self.close()
+            raise BindingRefused(category) from None
         except BaseException:
             self.close()
             raise
@@ -331,10 +367,12 @@ class Target:
                 )
             except Exception:
                 pass
-        if self.attached:
+        sessions = ([self.csid] if self.attached else []) + (
+            [self.psid] if self.parent_attached else []
+        )
+        for sid in sessions:
             try:
-                self.call(
-                    "Target.detachFromTarget", {"sessionId": self.csid}, cleanup=True
-                )
+                self.call("Target.detachFromTarget", {"sessionId": sid}, cleanup=True)
             except Exception:
                 pass
+        self.attached = self.parent_attached = False

@@ -69,7 +69,9 @@ class PaymentBrowserTests(unittest.TestCase):
         self.browser.close()
         self.pw.stop()
 
-    def _run_facility(self, choice="once", before_answer=None, issued_card=None):
+    def _run_facility(
+        self, choice="once", before_answer=None, issued_card=None, expected_prompts=1
+    ):
         from secure_entry.payment import LocalPayment
         from secure_entry.service import Service
         from gateway.session_context import set_session_vars, clear_session_vars
@@ -142,7 +144,7 @@ class PaymentBrowserTests(unittest.TestCase):
                         task_id="synthetic-payment",
                     )
                 )
-        self.assertEqual(len(prompts), 1)
+        self.assertEqual(len(prompts), expected_prompts)
         return result, prompts
 
     def target_for_html(self, html):
@@ -159,6 +161,61 @@ class PaymentBrowserTests(unittest.TestCase):
         self.assertTrue(target.attached)
         return target
 
+    def test_binding_refusal_categories_are_safe(self):
+        parent, frame = self.parent, self.frame
+        for category in ("selected_parent", "frame_lineage", "form_layout"):
+            self.parent, self.frame = parent, frame
+            if category == "selected_parent":
+                self.parent = "missing-private-target"
+            elif category == "frame_lineage":
+                self.frame = "missing-private-frame"
+            else:
+                self.page.frames[1].evaluate(
+                    'document.body.innerHTML="<div>unsupported</div>"'
+                )
+            result, _ = self._run_facility(expected_prompts=0)
+            self.assertEqual(
+                result,
+                dict(
+                    success=False,
+                    status="refused",
+                    stage="target_binding",
+                    refusal=category,
+                ),
+            )
+
+    def test_formless_cohesive_payment_widget(self):
+        target = self.target_for_html(
+            '<div><section><input autocomplete="cc-number"></section>'
+            '<section><input autocomplete="cc-exp"></section></div>'
+        )
+        self.assertEqual(
+            target.fill(dict(number="4242424242424242", exp_month=12, exp_year=2030))[
+                "filled_fields"
+            ],
+            2,
+        )
+
+    def test_formless_unrelated_groups_refused(self):
+        for html in [
+            '<div><input autocomplete="cc-number"></div><div><input autocomplete="cc-exp"></div>',
+            '<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div><div><input autocomplete="billing postal-code"></div>',
+            '<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div>'
+            * 2,
+        ]:
+            with self.subTest(html=html), self.assertRaises(ValueError):
+                self.target_for_html(html)
+
+    def test_formless_retained_container_replacement_refused(self):
+        target = self.target_for_html(
+            '<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div>'
+        )
+        self.page.frames[1].evaluate(
+            'document.querySelector("div").outerHTML=document.querySelector("div").outerHTML'
+        )
+        with self.assertRaises(ValueError):
+            target.check()
+
     def test_combined_expiry_without_merchant_cvc(self):
         target = self.target_for_html(
             '<form><input autocomplete="cc-number"><input autocomplete="cc-exp"></form>'
@@ -171,12 +228,17 @@ class PaymentBrowserTests(unittest.TestCase):
             self.page.frames[1].locator("[autocomplete=cc-exp]").input_value(), "12/30"
         )
 
-    def test_billing_selects_prefilled_and_react_property_tracker(self):
+    def test_formless_billing_selects_react_tracker(self):
+        self.test_billing_selects_prefilled_and_react_property_tracker(formless=True)
+
+    def test_billing_selects_prefilled_and_react_property_tracker(self, formless=False):
         html = """<form><input autocomplete="cc-number"><input autocomplete="cc-exp">
         <input autocomplete="cc-name"><select autocomplete="billing country"><option value="US" selected>United States</option></select>
         <input autocomplete="billing address-line1"><input autocomplete="billing address-line2">
         <input autocomplete="billing address-level2"><select autocomplete="billing address-level1"><option value="NY" selected>New York</option></select>
         <input autocomplete="billing postal-code"><input autocomplete="billing tel" value="2125550100"></form>"""
+        if formless:
+            html = html.replace("<form>", "<div>").replace("</form>", "</div>")
         self.page.frames[1].evaluate("html => document.body.innerHTML=html", html)
         self.page.frames[
             1
@@ -417,7 +479,7 @@ class PaymentBrowserTests(unittest.TestCase):
             self.page.frames[1].locator("[autocomplete=cc-exp-month]").input_value(), ""
         )
 
-    def _dispatched_browseruse_fill(self, session="", hybrid=False):
+    def _dispatched_browseruse_fill(self, session="", hybrid=False, nonprimary=False):
         """Real harness process + native attach/capture; only browser provisioning
         is replaced with this test's already-launched disposable Chrome endpoint.
         No generated receipt, plugin authority, live browser or live IPC runtime.
@@ -486,8 +548,52 @@ class PaymentBrowserTests(unittest.TestCase):
                     self.assertTrue(capture.is_valid())
                     self.assertEqual(capture.cdp_url, endpoint)
                     self.capture = capture
+                    if nonprimary:
+                        original = self.page
+                        self.page = self.context.new_page()
+                        self.page.goto("https://merchant.test/second")
+                        page_session = self.context.new_cdp_session(self.page)
+                        self.parent = page_session.send("Target.getTargetInfo")[
+                            "targetInfo"
+                        ]["targetId"]
+                        root = page_session.send("DOM.getDocument")["root"]["nodeId"]
+                        node = page_session.send(
+                            "DOM.querySelector", {"nodeId": root, "selector": "iframe"}
+                        )["nodeId"]
+                        self.frame = page_session.send(
+                            "DOM.describeNode", {"nodeId": node}
+                        )["node"]["frameId"]
+                        selected = bu.browser_exec(
+                            "switch_tab("
+                            + repr(self.parent)
+                            + ')\nprint(current_tab()["targetId"])',
+                            session=session,
+                            task_id="synthetic-payment",
+                            timeout_s=45,
+                        )
+                        if isinstance(selected, str):
+                            selected = json.loads(selected)
+                        self.assertTrue(selected.get("success"), selected)
+                        self.assertIn(self.parent, selected["output"])
+                        default = capture.call(
+                            "Target.getTargetInfo", session_id=capture.page_session_id
+                        )["result"]["targetInfo"]["targetId"]
+                        self.assertNotEqual(default, self.parent)
                     filled, _ = self._run_facility()
                     self.assertTrue(filled["success"], filled)
+                    if nonprimary:
+                        self.assertEqual(
+                            original.frames[1]
+                            .locator("[autocomplete=cc-number]")
+                            .input_value(),
+                            "",
+                        )
+                        self.assertEqual(
+                            self.page.frames[1]
+                            .locator("[autocomplete=cc-number]")
+                            .input_value(),
+                            "4242424242424242",
+                        )
                 finally:
                     import time
 
@@ -533,6 +639,50 @@ class PaymentBrowserTests(unittest.TestCase):
                         except PermissionError:
                             time.sleep(0.1)
                     bu._driven_daemons.discard(name)
+
+    def test_nonprimary_attachment_cleanup_and_wrong_frame_lineage(self):
+        other = self.context.new_page()
+        other.goto("https://merchant.test/other")
+        session = self.context.new_cdp_session(other)
+        parent = session.send("Target.getTargetInfo")["targetInfo"]["targetId"]
+        with self.assertRaises(payment_browser.BindingRefused) as caught:
+            payment_browser.Target(
+                self.capture,
+                parent,
+                self.frame,
+                "https://merchant.test",
+                "https://provider.test",
+                lambda: None,
+            )
+        self.assertEqual(caught.exception.category, "frame_lineage")
+        root = session.send("DOM.getDocument")["root"]["nodeId"]
+        node = session.send(
+            "DOM.querySelector", {"nodeId": root, "selector": "iframe"}
+        )["nodeId"]
+        frame = session.send("DOM.describeNode", {"nodeId": node})["node"]["frameId"]
+        target = payment_browser.Target(
+            self.capture,
+            parent,
+            frame,
+            "https://merchant.test",
+            "https://provider.test",
+            lambda: None,
+        )
+        self.assertTrue(target.parent_attached)
+        sessions = (target.psid, target.csid)
+        target.close()
+        for sid in sessions:
+            with self.assertRaises(RuntimeError):
+                self.capture.call("Target.getTargetInfo", session_id=sid)
+        self.assertEqual(
+            self.capture.call(
+                "Target.getTargetInfo", session_id=self.capture.page_session_id
+            )["result"]["targetInfo"]["targetId"],
+            self.parent,
+        )
+
+    def test_nonprimary_browseruse_selected_exact_parent(self):
+        self._dispatched_browseruse_fill(session="synthetic-multitab", nonprimary=True)
 
     def test_default_browseruse_dispatch_to_existing_public_capture_fill(self):
         self._dispatched_browseruse_fill()

@@ -24,6 +24,34 @@ Inspected installed `@stripe/link-cli@0.27.4` `dist/cli.js` without executing wa
 
 `applyOutputFile` (lines 9284–9299) writes a **single object**, not an array: `{spend_request_id, merchant_name, merchant_url, context, created_at, card}`. It removes `card` from stdout metadata and adds `card_output_file`. The existing private-file consumer already matches that structure. A synthetic subprocess exercises the object/array split through the actual adapter and Windows private-file consumer, including billing and delete-on-close cleanup. No live credentials or checkout were accessed for this fix.
 
+## Generic target binding compatibility (0.4.2)
+
+Formless controls require one smallest shared container other than body/html,
+no form owners, no unrelated controls, unique supported autocomplete tokens and
+one complete payment shape. Container, field parents, nodes, document, context,
+origins and sticky mutation checks remain retained; no provider/ID exceptions.
+Ordinary one-form support is unchanged. Distinct groups joined only at the
+document body, duplicate widgets and unrelated controls refuse.
+
+An explicit parent page may differ from the capture's default page. The facility
+uses only supported `CapturedCDP.call` on that same captured socket to inspect and
+attach the exact supplied page, verifies its type/identity, then proves direct
+iframe ownership. It does not discover endpoints, enumerate/focus pages or start
+browsers. Both child and owned parent attachments are cleaned up, including late
+attachment replies. Native approval still follows successful binding.
+
+Safe `target_binding` refusal categories are `selected_parent`, `frame_lineage`
+and `form_layout`; raw CDP errors and target/DOM data are never returned.
+Regressions exercise real cross-origin formless billing/SELECT/React-like controls,
+retained-container replacement, unrelated groups, and actual BrowserUse subprocess
+IPC selection of a non-primary tab. The original tab stays empty. This is synthetic
+fixture evidence, not live merchant acceptance.
+
+0.4.2 verification: full suite **176 tests passed**; targeted real-browser suite
+passed, including actual multi-tab harness integration. Targeted Ruff checks,
+plugin doctor and all catalog checks passed. Catalog retains the existing
+private-core-import warning. No installation or live payment interaction ran.
+
 ## Registered native facility
 
 `secure_entry_payment_fill(parent, frame, merchant_origin, frame_origin, spend_request_id)` accepts **metadata only**. The exact parent must exist on the native task supervisor's captured connection; the direct iframe must be owned by that parent. The authenticated same-profile supported DM, user/chat/session identity, native task and service lifecycle generation are checked. The existing public native capture pins the supervisor/WebSocket generation. No model-supplied endpoint, file path, script, selector, card or credential argument exists.
@@ -38,7 +66,7 @@ Windows-only `pywin32` is a runtime prerequisite (present in the exercised isola
 
 ## Scope limits / activation gates
 
-- Exactly one ordinary form in one **direct** cross-origin iframe. Supports standard `cc-number`, either `cc-exp` (MM/YY) or both split expiry controls, optional `cc-csc`, `cc-name`, and billing country/address/city/state/postal/tel autocomplete. Country/state may be SELECT controls with one exact enabled matching option. Other controls, duplicates, mixed expiry shapes, multiple forms, nested frames and shadow DOM are not supported; no site-specific selectors exist. Name/address values come only from the issued Link `card.billing_address`. Matching prefilled public billing/cardholder fields are preserved; mismatches refuse before writing any field. Existing phone may be preserved privately, but an empty phone without a native source refuses (there is no model phone override yet). No guest profile address is substituted for issued billing. PAN/expiry/CVC must be empty initially. Native prototype setters dispatch bubbling input/change events, including React-like own-property value trackers. Only `aria-invalid`, `aria-describedby`, `aria-errormessage` attribute changes are treated as benign validation; structural/security/style mutations remain sticky refusal. PAN verification accepts only exact expected digits with single spaces/hyphens separating digit groups, not arbitrary masking/content. **Cvent/Passkey live compatibility remains unverified.**
+- Exactly one ordinary form or one cohesive formless container in one **direct** cross-origin iframe. Supports standard `cc-number`, either `cc-exp` (MM/YY) or both split expiry controls, optional `cc-csc`, `cc-name`, and billing country/address/city/state/postal/tel autocomplete. Country/state may be SELECT controls with one exact enabled matching option. Other controls, duplicates, mixed expiry shapes, multiple forms, nested frames and shadow DOM are not supported; no site-specific selectors exist. Name/address values come only from the issued Link `card.billing_address`. Matching prefilled public billing/cardholder fields are preserved; mismatches refuse before writing any field. Existing phone may be preserved privately, but an empty phone without a native source refuses (there is no model phone override yet). No guest profile address is substituted for issued billing. PAN/expiry/CVC must be empty initially. Native prototype setters dispatch bubbling input/change events, including React-like own-property value trackers. Only `aria-invalid`, `aria-describedby`, `aria-errormessage` attribute changes are treated as benign validation; structural/security/style mutations remain sticky refusal. PAN verification accepts only exact expected digits with single spaces/hyphens separating digit groups, not arbitrary masking/content. **Cvent/Passkey live compatibility remains unverified.**
 - Requires a live *already-selected* native task supervisor, captured through the existing public `SUPERVISOR_REGISTRY.capture(task_id)` API. No legacy `_active_sessions` metadata or new core patch is needed. It never creates/reselects a browser or obtains authority from a visible target/loopback endpoint. Default, named and hybrid BrowserUse dispatch work in the isolated native harness. Local/cloud CDP captures can satisfy the contract; LOCAL refers to the Link CLI/private-file source, not browser geography. Direct-cloud routes with no existing native capture refuse. There is no route-name selector or last-successful-dispatch receipt: the exact explicit parent/frame on the current task capture is the target, not an inferred daemon. Existing captures never retarget on supervisor replacement/reconnect. See [the corrected no-core-dependency decision](payment-route-blocker.md).
 - Conservatively applies the genuine profile-specific native desktop lease to **all** payment routes, regardless of uncertain desktop classification. Active human takeover refuses before capture; the retained epoch also detects takeover-and-handback. Checks run around approval/retrieval, immediately before target CDP dispatch and after completion. This can over-refuse an unrelated cloud browser while a human holds the profile desktop, but does not bypass native protections.
 - Uses native host adapters also used by existing vault tools. Doctor and catalog validation exercise real registration. Catalog validation can report **private-core-import warnings** for existing owner/OTP adapters and native modules; there is no core override, monkeypatch or new upstream dependency in production. Public capture is an existing native API, not a new PluginContext facade.

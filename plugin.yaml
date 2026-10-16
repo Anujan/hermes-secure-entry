@@ -1,5 +1,5 @@
 name: secure-entry
-version: 0.4.1
+version: 0.4.2
 description: Preview private DM login/OTP/unlock entry plus disabled-by-default native LOCAL Link private-card handoff. In-process only; payment candidate is not live verified.
 license: MIT
 requires_hermes: ">=0.22.1,<0.22.2"

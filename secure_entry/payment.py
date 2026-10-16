@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from .native import owner, validate_origin
 from .payment_file import PrivateCard
-from .payment_browser import Target
+from .payment_browser import BindingRefused, Target
 
 
 def retrieve_card(command, request_id, output):
@@ -198,7 +198,7 @@ class LocalPayment:
             result = operation()
             current()
             return json.dumps(result)
-        except Exception:
+        except Exception as exc:
             return json.dumps(
                 {
                     "success": False,
@@ -206,6 +206,11 @@ class LocalPayment:
                     if target and target.started
                     else "refused",
                     "stage": stage,
+                    **(
+                        {"refusal": exc.category}
+                        if isinstance(exc, BindingRefused)
+                        else {}
+                    ),
                 }
             )
         finally:
