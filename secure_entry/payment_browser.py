@@ -1,0 +1,340 @@
+"""Registered payment facility's exact-document browser transport.
+
+Only native CapturedCDP handles; never endpoint discovery, page searching, main
+world injection, model JavaScript/selectors, or submission. Deliberately strict:
+one direct iframe, one ordinary form, standard payment/billing autocomplete.
+PAN/expiry/CVC must be empty; matching issued public billing stays private.
+Parent pre/post checks are not an atomic cross-document no-disclosure fence.
+Inspired by the reviewed secure-env-ingress design; no source copied (upstream
+has no declared license). Remote object IDs retain document/node identity in an
+isolated world; navigation destroys them rather than retargeting a new document.
+"""
+
+import secrets
+
+# Generated fixed code runs only inside the registered native payment facility.
+# All authority is closure-private in a fresh isolated world, never DOM stamps.
+PARENT = r"""function(expected) {
+ const doc=document, href=location.href, node=this, parent=node.parentNode;
+ let changed=false;
+ const observer=new MutationObserver(()=>changed=true);
+ observer.observe(doc,{subtree:true,childList:true,attributes:true});
+ return {valid(){if(observer.takeRecords().length)changed=true;
+   return !changed && document===doc && location.href===href && location.origin===expected &&
+     node.isConnected && node.ownerDocument===doc && node.parentNode===parent;},
+   close(){changed=true;observer.disconnect();}};
+}"""
+CHILD = r"""(() => {
+ const doc=document, href=location.href, origin=location.origin;
+ const forms=Array.from(doc.forms);
+ if(forms.length!==1)throw Error('unsupported');
+ const form=forms[0], fields=Array.from(form.elements);
+ const allowed=['cc-number','cc-exp','cc-exp-month','cc-exp-year','cc-csc','cc-name',
+   'billing country','billing address-line1','billing address-line2','billing address-level2',
+   'billing address-level1','billing postal-code','billing tel'];
+ const tokens=fields.map(e=>e.autocomplete);
+ if(doc.querySelectorAll('input,select,textarea').length!==fields.length ||
+   fields.some(e=>!['INPUT','SELECT'].includes(e.tagName) || !allowed.includes(e.autocomplete) ||
+     (e.tagName==='SELECT' && !['billing country','billing address-level1'].includes(e.autocomplete))) ||
+   new Set(tokens).size!==tokens.length || !tokens.includes('cc-number') ||
+   (tokens.includes('cc-exp') ? tokens.includes('cc-exp-month') || tokens.includes('cc-exp-year') :
+     !tokens.includes('cc-exp-month') || !tokens.includes('cc-exp-year')))throw Error('unsupported');
+ const usable=e=>!e.disabled && !e.readOnly && !['hidden','password','checkbox','radio','file','submit','button'].includes(e.type) &&
+   e.getClientRects().length && getComputedStyle(e).visibility==='visible';
+ if(fields.some((e,i)=>!usable(e) || (tokens[i].startsWith('cc-') && tokens[i]!=='cc-name' && e.value)))throw Error('unsupported');
+ const initial=fields.map(e=>e.value);
+ let changed=false, used=false;
+ const securityRecords=records=>records.some(r=>r.type!=='attributes' || !['aria-invalid','aria-describedby','aria-errormessage'].includes(r.attributeName));
+ const observer=new MutationObserver(records=>{if(securityRecords(records))changed=true;});
+ observer.observe(doc,{subtree:true,childList:true,attributes:true,characterData:true});
+ const valid=()=>{if(securityRecords(observer.takeRecords()))changed=true;
+   return !changed && document===doc && location.href===href && location.origin===origin &&
+     form.isConnected && fields.every((e,i)=>e.isConnected && e.form===form && e.ownerDocument===doc && usable(e) && e.autocomplete===tokens[i]);};
+ const setters={INPUT:Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set,
+   SELECT:Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set};
+ return {valid, origin,
+   write(card){const values=tokens.map(t=>card[t]);
+     // Phone is contact metadata, not Link's billing identity: preserve a prefilled
+     // value privately. Never use guest profile fields in place of issued billing.
+     values.forEach((v,i)=>{if(tokens[i]==='billing tel' && v===undefined)values[i]=initial[i] || undefined;});
+     if(used || !valid() || values.some(v=>typeof v!=='string') || fields.some((e,i)=>
+       e.value!==initial[i] || (initial[i] && initial[i]!==values[i]) ||
+       (e.tagName==='SELECT' && Array.from(e.options).filter(o=>o.value===values[i] && !o.disabled && !o.parentElement.disabled).length!==1)))return {written:0,valid:false};
+     used=true;let written=0;
+     const expected=initial.slice();
+     for(let i=0;i<fields.length;i++){
+       if(!valid() || fields.some((e,j)=>e.value!==expected[j]))return {written,valid:false};
+       if(fields[i].value===values[i])continue;
+       setters[fields[i].tagName].call(fields[i],values[i]);written++;
+       expected[i]=values[i];
+       fields[i].dispatchEvent(new Event('input',{bubbles:true}));
+       if(!valid())return {written,valid:false};
+       fields[i].dispatchEvent(new Event('change',{bubbles:true}));
+       if(!valid())return {written,valid:false};
+       const actual=fields[i].value;
+       if(tokens[i]==='cc-number' && /^[0-9]+(?:[ -][0-9]+)*$/.test(actual) && actual.replace(/[ -]/g,'')===values[i])expected[i]=actual;
+       else if(actual!==values[i])return {written,valid:false};
+     }return {written,valid:valid() && fields.every((e,i)=>e.value===expected[i])};},
+   close(){changed=true;observer.disconnect();}};
+})()"""
+
+
+class Target:
+    def __init__(self, capture, parent, frame, merchant, provider, guard):
+        self.capture, self.guard = capture, guard
+        self.parent, self.frame = parent, frame
+        self.merchant, self.provider = merchant, provider
+        self.psid = capture.page_session_id
+        self.csid = self.psid
+        self.objects = []
+        self.group = "secure-entry-payment-" + secrets.token_hex(16)
+        self.attached = False
+        self.closed = False
+        self.started = False
+        try:
+            info = self.call("Target.getTargetInfo", {}, self.psid)["targetInfo"]
+            if info["targetId"] != parent or info["type"] != "page":
+                raise ValueError("target_refused")
+            tree = self.call("Page.getFrameTree", {}, self.psid)["frameTree"]
+            root = tree["frame"]["id"]
+            owner = self.call("DOM.getFrameOwner", {"frameId": frame}, self.psid)[
+                "backendNodeId"
+            ]
+            # getFrameOwner in this page proves lineage; direct parent check is
+            # enforced in the isolated world by resolving the actual owner node.
+            context = self.world(root, self.psid)
+            node = self.call(
+                "DOM.resolveNode",
+                {"backendNodeId": owner, "executionContextId": context},
+                self.psid,
+            )["object"]["objectId"]
+            try:
+                self.pg = self.remote(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": node,
+                        "functionDeclaration": PARENT,
+                        "arguments": [{"value": merchant}],
+                    },
+                    self.psid,
+                )
+            finally:
+                self.call("Runtime.releaseObject", {"objectId": node}, self.psid)
+            try:
+                context = self.world(frame, self.csid)
+            except Exception:
+                self.csid = self.attach_frame(frame)
+                self.attached = True
+                context = self.world(frame, self.csid)
+            self.cg = self.remote(
+                "Runtime.evaluate",
+                {"expression": CHILD, "contextId": context},
+                self.csid,
+            )
+            if (
+                self.invoke(self.csid, self.cg, "function(){return this.origin;}")
+                != provider
+            ):
+                raise ValueError("target_refused")
+            self.check()
+        except BaseException:
+            self.close()
+            raise
+
+    def attach_frame(self, frame, timeout=5):
+        # A finite CDP timeout can discard a successful attachment's late ID.
+        # Keep the original socket's reply in a consumer-owned worker; after
+        # abandonment that worker owns detach, never any replacement socket.
+        import threading
+        from contextvars import copy_context
+
+        done, lock = threading.Event(), threading.Lock()
+        state = {"abandoned": False, "sid": None, "failed": False}
+
+        def detach(sid):
+            try:
+                self.capture.call(
+                    "Target.detachFromTarget", {"sessionId": sid}, timeout=None
+                )
+            except Exception:
+                pass
+
+        def before_send():
+            self.guard()
+            if self.closed or state["abandoned"]:
+                raise ValueError("target_refused")
+
+        def worker():
+            sid = None
+            try:
+                sid = self.capture.call(
+                    "Target.attachToTarget",
+                    {"targetId": frame, "flatten": True},
+                    timeout=None,
+                    before_send=before_send,
+                )["result"]["sessionId"]
+                with lock:
+                    if not state["abandoned"]:
+                        state["sid"] = sid
+                        sid = None
+            except Exception:
+                with lock:
+                    state["failed"] = True
+            finally:
+                done.set()
+                if sid:
+                    detach(sid)
+
+        context = copy_context()
+        threading.Thread(
+            target=lambda: context.run(worker),
+            daemon=True,
+            name="secure-entry-payment-attach",
+        ).start()
+        if not done.wait(timeout):
+            with lock:
+                state["abandoned"] = True
+                sid, state["sid"] = state["sid"], None
+            if sid:
+                threading.Thread(target=lambda: detach(sid), daemon=True).start()
+            raise TimeoutError("frame_attachment_timeout")
+        with lock:
+            if state["failed"] or not state["sid"]:
+                raise ValueError("target_refused")
+            return state["sid"]
+
+    def call(self, method, params, sid=None, *, cleanup=False):
+        def before_send():
+            if not cleanup:
+                self.guard()
+                if self.closed:
+                    raise ValueError("target_refused")
+
+        return self.capture.call(
+            method, params, session_id=sid, before_send=before_send
+        )["result"]
+
+    def world(self, frame, sid):
+        return self.call(
+            "Page.createIsolatedWorld",
+            {
+                "frameId": frame,
+                "worldName": "secure-entry-payment-" + secrets.token_hex(16),
+            },
+            sid,
+        )["executionContextId"]
+
+    def remote(self, method, params, sid):
+        response = self.call(method, {**params, "objectGroup": self.group}, sid)
+        if response.get("exceptionDetails") or not response.get("result", {}).get(
+            "objectId"
+        ):
+            raise ValueError("target_refused")
+        obj = response["result"]["objectId"]
+        self.objects.append((sid, obj))
+        return obj
+
+    def invoke(self, sid, obj, function, args=()):
+        response = self.call(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": obj,
+                "functionDeclaration": function,
+                "arguments": [{"value": v} for v in args],
+                "returnByValue": True,
+            },
+            sid,
+        )
+        if response.get("exceptionDetails"):
+            raise ValueError("target_refused")
+        return response.get("result", {}).get("value")
+
+    def check(self):
+        self.guard()
+        if self.closed or not self.capture.is_valid():
+            raise ValueError("target_refused")
+        for sid, obj in ((self.psid, self.pg), (self.csid, self.cg)):
+            if self.invoke(sid, obj, "function(){return this.valid();}") is not True:
+                raise ValueError("target_refused")
+
+    def fill(self, card):
+        self.check()
+        billing = card.get("billing_address", {})
+        billing_values = {
+            token: billing[key]
+            for token, key in {
+                "cc-name": "name",
+                "billing country": "country",
+                "billing address-line1": "line1",
+                "billing address-level2": "city",
+                "billing address-level1": "state",
+                "billing postal-code": "postal_code",
+            }.items()
+            if key in billing
+        }
+        if billing:
+            billing_values["billing address-line2"] = billing.get("line2", "")
+        self.started = True
+        result = self.invoke(
+            self.csid,
+            self.cg,
+            "function(values){return this.write(values);}",
+            (
+                {
+                    **billing_values,
+                    "cc-number": card["number"],
+                    "cc-exp-month": str(card["exp_month"]).zfill(2),
+                    "cc-exp-year": str(card["exp_year"]),
+                    "cc-exp": f"{card['exp_month']:02d}/{card['exp_year'] % 100:02d}",
+                    "cc-csc": card.get("cvc"),
+                },
+            ),
+        )
+        self.check()
+        if (
+            not isinstance(result, dict)
+            or result.get("valid") is not True
+            or not isinstance(result.get("written"), int)
+            or result["written"] < 2
+        ):
+            raise ValueError("write_unknown")
+        return {"success": True, "status": "filled", "filled_fields": result["written"]}
+
+    def close(self):
+        self.closed = True
+        for sid, obj in self.objects:
+            try:
+                self.call(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": obj,
+                        "functionDeclaration": "function(){this.close();}",
+                        "returnByValue": True,
+                    },
+                    sid,
+                    cleanup=True,
+                )
+            except Exception:
+                pass
+            try:
+                self.call("Runtime.releaseObject", {"objectId": obj}, sid, cleanup=True)
+            except Exception:
+                pass
+        self.objects.clear()
+        for sid in {self.psid, self.csid}:
+            try:
+                self.call(
+                    "Runtime.releaseObjectGroup",
+                    {"objectGroup": self.group},
+                    sid,
+                    cleanup=True,
+                )
+            except Exception:
+                pass
+        if self.attached:
+            try:
+                self.call(
+                    "Target.detachFromTarget", {"sessionId": self.csid}, cleanup=True
+                )
+            except Exception:
+                pass

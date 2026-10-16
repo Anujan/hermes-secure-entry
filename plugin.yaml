@@ -1,9 +1,10 @@
 name: secure-entry
-version: 0.3.0
-description: Preview private Photon, Discord and Telegram DM forms for native vault login adds and scoped native OTP and manager unlock callbacks. In-process only.
+version: 0.4.0
+description: Preview private DM login/OTP/unlock entry plus disabled-by-default native LOCAL Link private-card handoff. In-process only; payment candidate is not live verified.
 license: MIT
 requires_hermes: ">=0.22.1,<0.22.2"
 provides_tools:
+  - secure_entry_payment_fill
   - secure_entry_request
   - secure_entry_status
   - secure_entry_cancel
@@ -17,6 +18,10 @@ python_dependencies: []
 capabilities: []
 tags: [security, vault, photon, discord, telegram, windows, accessibility]
 config_schema:
+  link_cli_command:
+    type: list
+    default: []
+    description: Trusted absolute executable argv prefix for local Link CLI; empty disables payment. Use native node.exe plus absolute CLI entrypoint, never cmd/bat or shell commands. No live activation until reviewed.
   public_base_url:
     type: str
     default: https://example.invalid:9443

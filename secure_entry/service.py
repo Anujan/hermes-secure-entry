@@ -27,6 +27,9 @@ class Service:
         from .bridge import Bridge
         self.bridge = Bridge(self, dispatch, isolation)
 
+    def payment_fill(self, args, **kwargs):
+        return self.payment.fill(args, **kwargs)
+
     def middleware(self, *, tool_name, args, next_call, **context):
         # Hermes 0.22.1 consolidates the native tools into browser_vault actions.
         # Normalize only the bridge's existing scopes; fill/save/unknown actions

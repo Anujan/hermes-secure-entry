@@ -22,7 +22,7 @@ class RegistrationTests(unittest.TestCase):
             def on_unload(self, callback): self.cleanup.append(callback)
         ctx = Context()
         plugin.register(ctx)
-        self.assertEqual(set(ctx.tools), {'secure_entry_request', 'secure_entry_status', 'secure_entry_cancel'})
+        self.assertEqual(set(ctx.tools), {'secure_entry_request', 'secure_entry_status', 'secure_entry_cancel', 'secure_entry_payment_fill'})
         self.assertIn('agent_loop_stopped', ctx.hooks)
         self.assertIn('tool_execution', ctx.middleware)
         for item in ctx.tools.values():
