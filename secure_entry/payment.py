@@ -18,7 +18,7 @@ from .payment_file import PrivateCard, PrivateFileRefused
 from .payment_browser import BindingRefused, Target, WriteRefused
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.5.3"
+PAYMENT_DIAGNOSTIC_VERSION = "0.5.4"
 
 
 class RetrievalRefused(ValueError):

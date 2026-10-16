@@ -171,7 +171,7 @@ class PaymentBrowserTests(unittest.TestCase):
         })
         self.assertEqual(result, {
             "success": False, "status": "write_unknown", "stage": "write",
-            "payment_diagnostic_version": "0.5.3",
+            "payment_diagnostic_version": "0.5.4",
             "refusal": "initial_mismatch", "field": "cc-name", "written_fields": 0,
         })
 
@@ -218,6 +218,86 @@ class PaymentBrowserTests(unittest.TestCase):
         self.assertEqual(target.invoke(target.csid, target.cg, "function(v){return this.write(v);}", (values,)),
                          {"written": 0, "valid": False, "reason": "already_used"})
 
+    def test_framework_value_attribute_reflects_only_current_self_write(self):
+        for event in ('input', 'change'):
+            for formatted in (False, True):
+                with self.subTest(event=event, formatted=formatted):
+                    target = self.target_for_html(
+                        '<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div>'
+                    )
+                    self.page.frames[1].evaluate('''([event, formatted]) => {
+                        document.querySelectorAll('input').forEach(e => {
+                            e.addEventListener(event, () => {
+                                if(formatted && e.autocomplete==='cc-number')
+                                    e.value=e.value.match(/.{1,4}/g).join(' ');
+                                if(formatted && e.autocomplete==='cc-exp')
+                                    e.value=e.value.replace('/', ' / ');
+                                e.setAttribute('value', e.value);
+                            });
+                        });
+                    }''', [event, formatted])
+                    result = target.fill(dict(number='4242424242424242', exp_month=12, exp_year=2035))
+                    self.assertEqual(result['filled_fields'], 2)
+                    target.close()
+
+    def test_value_reflection_does_not_authorize_foreign_or_mismatched_mutations(self):
+        cases = [
+            "n.setAttribute('value','4242424242424241')",
+            "n.setAttribute('value','4242424242424241'); n.setAttribute('value',n.value)",
+            "n.setAttribute('value',n.value); n.removeAttribute('value')",
+            "n.value='4242424242424241'; n.setAttribute('value',n.value)",
+            "x.value='12/35'",
+            "x.setAttribute('value','12/35')",
+            "x.setAttribute('value',''); x.removeAttribute('value')",
+            "n.parentNode.setAttribute('value',n.value)",
+            "n.setAttribute('data-untrusted','yes')",
+            "n.setAttribute('type','tel'); n.removeAttribute('type')",
+            "n.setAttribute('name','other'); n.removeAttribute('name')",
+            "n.autocomplete='cc-name'; n.autocomplete='cc-number'",
+            "n.replaceWith(n.cloneNode(true))",
+            "n.parentNode.setAttribute('inert',''); n.parentNode.removeAttribute('inert')",
+        ]
+        values = {'cc-number': '4242424242424242', 'cc-exp': '12/35'}
+        for change in cases:
+            with self.subTest(change=change):
+                target = self.target_for_html('<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div>')
+                self.page.frames[1].evaluate('''change => {
+                    const [n,x]=document.querySelectorAll('input');
+                    n.oninput=()=>{n.setAttribute('value',n.value); eval(change)};
+                }''', change)
+                result = target.invoke(target.csid, target.cg, 'function(v){return this.write(v);}', (values,))
+                self.assertFalse(result['valid'])
+                self.assertEqual(result['written'], 1)
+                target.close()
+
+    def test_value_attribute_mutations_before_or_after_write_stay_sticky(self):
+        for change in ("n.setAttribute('value','')", "n.setAttribute('value','bad'); n.removeAttribute('value')"):
+            with self.subTest(change=change):
+                target = self.target_for_html('<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div>')
+                self.page.frames[1].evaluate('() => {const n=document.querySelector("input"); '+change+'}')
+                result = target.invoke(target.csid, target.cg, 'function(v){return this.write(v);}',
+                                       ({'cc-number': '4242424242424242', 'cc-exp': '12/35'},))
+                self.assertEqual(result, {'written': 0, 'valid': False, 'reason': 'invalidated'})
+                target.close()
+        target = self.target_for_html('<div><input autocomplete="cc-number"><input autocomplete="cc-exp"></div>')
+        target.fill(dict(number='4242424242424242', exp_month=12, exp_year=2035))
+        self.page.frames[1].evaluate('''() => {const n=document.querySelector('input'); n.setAttribute('value',n.value)}''')
+        with self.assertRaises(ValueError):
+            target.check()
+
+    def test_reflected_expiry_still_requires_exact_month_and_year(self):
+        for value in ('11/35', '12/36', '12/2035', '12/35x'):
+            with self.subTest(value=value):
+                target = self.target_for_html('<div><input autocomplete="cc-number"><input autocomplete="cc-exp"><input autocomplete="cc-csc"></div>')
+                self.page.frames[1].evaluate('''value => {
+                    const e=document.querySelector('[autocomplete=cc-exp]');
+                    e.oninput=()=>{e.value=value; e.setAttribute('value',e.value)};
+                }''', value)
+                with self.assertRaises(ValueError):
+                    target.fill(dict(number='4242424242424242', exp_month=12, exp_year=2035, cvc='987'))
+                self.assertEqual(self.page.frames[1].locator('[autocomplete=cc-csc]').input_value(), '')
+                target.close()
+
     def test_writer_diagnostics_discard_untrusted_values(self):
         failure = payment_browser.WriteRefused({
             "reason": "SYNTHETIC_PRIVATE", "field": "SYNTHETIC_PRIVATE",
@@ -248,7 +328,7 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
-                    payment_diagnostic_version="0.5.3",
+                    payment_diagnostic_version="0.5.4",
                 ),
             )
 
@@ -644,7 +724,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 success=True,
                 status="filled",
                 filled_fields=4,
-                payment_diagnostic_version="0.5.3",
+                payment_diagnostic_version="0.5.4",
             ),
         )
         self.assertNotIn(
@@ -939,7 +1019,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 "success": True,
                 "status": "filled",
                 "filled_fields": 4,
-                "payment_diagnostic_version": "0.5.3",
+                "payment_diagnostic_version": "0.5.4",
             },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
@@ -1027,7 +1107,7 @@ class PaymentBrowserTests(unittest.TestCase):
             {
                 "success": False,
                 "status": "payment_declined",
-                "payment_diagnostic_version": "0.5.3",
+                "payment_diagnostic_version": "0.5.4",
             },
         )
         self.assertEqual(

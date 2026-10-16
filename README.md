@@ -1,5 +1,7 @@
 # Hermes Secure Entry
 
+**0.5.4 framework value-reflection fix:** permit only the current retained INPUT's exact-semantic self-write reflection, including normal PAN/expiry formatting; prewrite, foreign-field and mismatched/restored mutations still refuse. [Tests and limits](docs/payment-widget-054.md).
+
 **0.5.3 widget-mutation fix:** tolerate card-brand/validation presentation updates after PAN input while retaining sticky control/ancestry/security-semantic mutation refusal. Supplied name/postal mismatch policy remains unchanged. [Tests and limits](docs/payment-widget-053.md). [Value-free diagnostics](docs/payment-writer-052.md).
 
 **0.5.1 candidate — two payment routes:** approved temporary Link cards remain available unchanged. A new **real-card** route privately saves a native site-bound payment item, fills the explicitly consented merchant/payment-iframe pair through the same retained native browser writer, and offers explicit handle-based cleanup with verified absence. Choose it for user-selected real cards, hotel guarantees or deferred charges where temporary cards are unsuitable. Native payment storage encrypts **CVC too**; the entry page discloses persistence. No automatic deletion, purchase, reservation, live activation or live hotel verification is claimed. See [workflow, native APIs, CVC limitation, tests and installation](docs/real-card-payment.md).

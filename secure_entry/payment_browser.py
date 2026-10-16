@@ -71,7 +71,21 @@ CHILD = r"""(() => {
  const retained=new Set(lineages.flat());
  const selects=fields.filter(e=>e.tagName==='SELECT');
  const semanticNode=n=>n.nodeType===1 && (n.matches('input,select,textarea,form,base') || n.querySelector('input,select,textarea,form,base'));
- const securityRecords=records=>records.some(r=>{
+ // Only the currently dispatched self-write may reflect into its INPUT value
+ // attribute. Keep exact semantic PAN/expiry invariants, including every queued
+ // intermediate attribute value (oldValue reconstructs synchronous restoration).
+ let reflection=null;
+ const reflects=(v,i,want)=>v===want || (tokens[i]==='cc-number' &&
+   /^[0-9]+(?:[ -][0-9]+)*$/.test(v) && v.replace(/[ -]/g,'')===want) ||
+   (tokens[i]==='cc-exp' && /^[0-9]{2} *\/ *[0-9]{2}$/.test(v) && v.replace(/ /g,'')===want);
+ const securityRecords=records=>records.some((r,k)=>{
+   if(r.type==='attributes' && r.attributeName==='value' && reflection &&
+     r.target===fields[reflection.i] && r.target.tagName==='INPUT'){
+     const next=records.slice(k+1).find(n=>n.type==='attributes' && n.target===r.target && n.attributeName==='value');
+     const value=next ? next.oldValue : r.target.getAttribute('value');
+     return value===null || !reflects(value,reflection.i,reflection.value) ||
+       !reflects(r.target.value,reflection.i,reflection.value);
+   }
    if(r.type==='attributes')return (retained.has(r.target) ||
      selects.some(e=>e.contains(r.target)) || r.target.tagName==='BASE') &&
      !['class','aria-invalid','aria-describedby','aria-errormessage'].includes(r.attributeName);
@@ -80,7 +94,7 @@ CHILD = r"""(() => {
      Array.from(r.addedNodes).some(semanticNode) || selects.some(e=>e.contains(r.target));
  });
  const observer=new MutationObserver(records=>{if(securityRecords(records))changed=true;});
- observer.observe(doc,{subtree:true,childList:true,attributes:true,characterData:true});
+ observer.observe(doc,{subtree:true,childList:true,attributes:true,attributeOldValue:true,characterData:true});
  const valid=()=>{if(securityRecords(observer.takeRecords()))changed=true;
    return !changed && document===doc && location.href===href && location.origin===origin &&
      container.isConnected && container.ownerDocument===doc && fields.every((e,i)=>e.isConnected && e.form===form && container.contains(e) && e.parentNode===parents[i] && e.ownerDocument===doc && usable(e) && e.autocomplete===tokens[i]);};
@@ -116,16 +130,19 @@ CHILD = r"""(() => {
        index=fields.findIndex((e,j)=>e.value!==expected[j]);
        if(index>=0)return refuse('field_changed',index);
        if(fields[i].value===values[i])continue;
-       setters[fields[i].tagName].call(fields[i],values[i]);written++;
-       expected[i]=values[i];
-       fields[i].dispatchEvent(new Event('input',{bubbles:true}));
-       if(!valid())return refuse('invalidated');
-       fields[i].dispatchEvent(new Event('change',{bubbles:true}));
-       if(!valid())return refuse('invalidated');
-       const actual=fields[i].value;
-       if(tokens[i]==='cc-number' && /^[0-9]+(?:[ -][0-9]+)*$/.test(actual) && actual.replace(/[ -]/g,'')===values[i])expected[i]=actual;
-       else if(tokens[i]==='cc-exp' && /^[0-9]{2} *\/ *[0-9]{2}$/.test(actual) && actual.replace(/ /g,'')===values[i])expected[i]=actual;
-       else if(actual!==values[i])return refuse(actual===initial[i]?'unchanged':tokens[i]==='cc-exp'?'expiry_format':'write_mismatch',i);
+       reflection={i,value:values[i]};
+       try {
+         setters[fields[i].tagName].call(fields[i],values[i]);written++;
+         expected[i]=values[i];
+         fields[i].dispatchEvent(new Event('input',{bubbles:true}));
+         if(!valid())return refuse('invalidated');
+         fields[i].dispatchEvent(new Event('change',{bubbles:true}));
+         if(!valid())return refuse('invalidated');
+         const actual=fields[i].value;
+         if(tokens[i]==='cc-number' && /^[0-9]+(?:[ -][0-9]+)*$/.test(actual) && actual.replace(/[ -]/g,'')===values[i])expected[i]=actual;
+         else if(tokens[i]==='cc-exp' && /^[0-9]{2} *\/ *[0-9]{2}$/.test(actual) && actual.replace(/ /g,'')===values[i])expected[i]=actual;
+         else if(actual!==values[i])return refuse(actual===initial[i]?'unchanged':tokens[i]==='cc-exp'?'expiry_format':'write_mismatch',i);
+       } finally {reflection=null;}
      }
      if(!valid())return refuse('invalidated');
      index=fields.findIndex((e,i)=>e.value!==expected[i]);
