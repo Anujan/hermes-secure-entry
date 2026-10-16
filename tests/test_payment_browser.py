@@ -181,6 +181,7 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
+                    payment_diagnostic_version="0.4.3",
                 ),
             )
 
@@ -413,7 +414,15 @@ class PaymentBrowserTests(unittest.TestCase):
             ),
         )
         result, _ = self._run_facility(issued_card=card)
-        self.assertEqual(result, dict(success=True, status="filled", filled_fields=4))
+        self.assertEqual(
+            result,
+            dict(
+                success=True,
+                status="filled",
+                filled_fields=4,
+                payment_diagnostic_version="0.4.3",
+            ),
+        )
         self.assertNotIn(
             "Unique Synthetic Cardholder",
             redact_registered_vault_values("Unique Synthetic Cardholder"),
@@ -698,7 +707,13 @@ class PaymentBrowserTests(unittest.TestCase):
 
         result, prompts = self._run_facility()
         self.assertEqual(
-            result, {"success": True, "status": "filled", "filled_fields": 4}
+            result,
+            {
+                "success": True,
+                "status": "filled",
+                "filled_fields": 4,
+                "payment_diagnostic_version": "0.4.3",
+            },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
         self.assertIn("https://provider.test", prompts[0]["command"])
@@ -778,7 +793,14 @@ class PaymentBrowserTests(unittest.TestCase):
 
     def test_native_decline_keeps_card_fields_empty(self):
         result, _ = self._run_facility("deny")
-        self.assertEqual(result, {"success": False, "status": "payment_declined"})
+        self.assertEqual(
+            result,
+            {
+                "success": False,
+                "status": "payment_declined",
+                "payment_diagnostic_version": "0.4.3",
+            },
+        )
         self.assertEqual(
             self.page.frames[1].locator("[autocomplete=cc-number]").input_value(), ""
         )

@@ -15,6 +15,33 @@ from .payment_file import PrivateCard
 from .payment_browser import BindingRefused, Target
 
 
+PAYMENT_DIAGNOSTIC_VERSION = "0.4.3"
+
+
+class RetrievalRefused(ValueError):
+    """Fixed, non-secret diagnostics only; never retain process output/errors."""
+
+    CATEGORIES = frozenset(
+        {
+            "command_invalid",
+            "subprocess_exit",
+            "subprocess_timeout",
+            "subprocess_unavailable",
+            "output_too_large",
+            "output_json_invalid",
+            "output_envelope_mismatch",
+            "output_id_mismatch",
+            "output_status_mismatch",
+            "producer_failed",
+        }
+    )
+
+    def __init__(self, category, exit_status=None):
+        super().__init__("link_retrieval_refused")
+        self.category = category if category in self.CATEGORIES else "producer_failed"
+        self.exit_status = exit_status if type(exit_status) is int else None
+
+
 def retrieve_card(command, request_id, output):
     """Trusted operator-configured CLI prefix; no shell, spend creation or approval.
 
@@ -32,7 +59,7 @@ def retrieve_card(command, request_id, output):
             or not Path(command[0]).is_absolute()
             or Path(command[0]).suffix.lower() in (".bat", ".cmd")
         ):
-            raise ValueError("link_retrieval_refused")
+            raise RetrievalRefused("command_invalid")
         result = subprocess.run(
             [
                 *command,
@@ -53,23 +80,34 @@ def retrieve_card(command, request_id, output):
             shell=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        if result.returncode or len(result.stdout) > 65536:
-            raise ValueError("link_retrieval_refused")
-        metadata = json.loads(result.stdout)
+        if result.returncode:
+            raise RetrievalRefused("subprocess_exit", result.returncode)
+        if len(result.stdout) > 65536:
+            raise RetrievalRefused("output_too_large")
+        try:
+            metadata = json.loads(result.stdout)
+        except (ValueError, UnicodeError):
+            raise RetrievalRefused("output_json_invalid") from None
         # Link CLI 0.27.4 streams retrieve results as a JSON array. Require
         # exactly one result; never select an approved row from ambiguous output.
         if isinstance(metadata, list):
             if len(metadata) != 1:
-                raise ValueError("link_retrieval_refused")
+                raise RetrievalRefused("output_envelope_mismatch")
             metadata = metadata[0]
-        if (
-            not isinstance(metadata, dict)
-            or metadata.get("id") != request_id
-            or metadata.get("status") != "approved"
-        ):
-            raise ValueError("link_retrieval_refused")
+        if not isinstance(metadata, dict):
+            raise RetrievalRefused("output_envelope_mismatch")
+        if metadata.get("id") != request_id:
+            raise RetrievalRefused("output_id_mismatch")
+        if metadata.get("status") != "approved":
+            raise RetrievalRefused("output_status_mismatch")
+    except RetrievalRefused:
+        raise
+    except subprocess.TimeoutExpired:
+        raise RetrievalRefused("subprocess_timeout") from None
+    except OSError:
+        raise RetrievalRefused("subprocess_unavailable") from None
     except Exception:
-        raise ValueError("link_retrieval_refused") from None
+        raise RetrievalRefused("producer_failed") from None
 
 
 class LocalPayment:
@@ -166,12 +204,15 @@ class LocalPayment:
                     return {"success": False, "status": "payment_declined"}
                 current()
                 target.check()
-                stage = "link_retrieval"
+                stage = "private_inbox"
                 root = Path(self.service.home) / "cache"
                 root.mkdir(parents=True, exist_ok=True)
                 with PrivateCard(root) as inbox:
+                    stage = "link_retrieval_producer"
                     self.retrieve(self.command, rid, inbox.path)
+                    stage = "post_retrieval_current"
                     current()
+                    stage = "post_retrieval_target_check"
                     target.check()
                     stage = "private_file"
                     card = inbox.consume(rid, merchant)
@@ -197,8 +238,39 @@ class LocalPayment:
 
             result = operation()
             current()
-            return json.dumps(result)
+            return json.dumps(
+                {**result, "payment_diagnostic_version": PAYMENT_DIAGNOSTIC_VERSION}
+            )
         except Exception as exc:
+            diagnostic = {}
+            if isinstance(exc, RetrievalRefused):
+                diagnostic = {"refusal": exc.category}
+                if exc.exit_status is not None:
+                    diagnostic["subprocess_exit_status"] = exc.exit_status
+            elif isinstance(exc, BindingRefused):
+                diagnostic = {"refusal": exc.category}
+            elif stage == "link_retrieval_producer":
+                diagnostic = {"refusal": "producer_failed"}
+            elif stage == "post_retrieval_current":
+                reason = (
+                    exc.args[0]
+                    if type(exc) is ValueError and len(exc.args) == 1
+                    else None
+                )
+                diagnostic = {
+                    "refusal": reason
+                    if isinstance(reason, str)
+                    and reason
+                    in {
+                        "operation_cancelled",
+                        "takeover_refused",
+                        "browser_capture_invalid",
+                        "owner_changed",
+                    }
+                    else "current_check_failed"
+                }
+            elif stage == "post_retrieval_target_check":
+                diagnostic = {"refusal": "target_check_failed"}
             return json.dumps(
                 {
                     "success": False,
@@ -206,11 +278,8 @@ class LocalPayment:
                     if target and target.started
                     else "refused",
                     "stage": stage,
-                    **(
-                        {"refusal": exc.category}
-                        if isinstance(exc, BindingRefused)
-                        else {}
-                    ),
+                    "payment_diagnostic_version": PAYMENT_DIAGNOSTIC_VERSION,
+                    **diagnostic,
                 }
             )
         finally:

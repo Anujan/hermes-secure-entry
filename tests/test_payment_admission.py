@@ -43,6 +43,66 @@ class PaymentAdmissionTests(unittest.TestCase):
         }
         self.key = browser_tool._last_session_key("synthetic-payment")
 
+    def test_retrieval_failure_stage_and_version_are_fixed_and_secret_free(self):
+        from types import SimpleNamespace
+        from secure_entry.payment import RetrievalRefused
+
+        for failure, expected_stage, expected_reason in (
+            ("producer", "link_retrieval_producer", "subprocess_exit"),
+            ("unknown_producer", "link_retrieval_producer", "producer_failed"),
+            ("current", "post_retrieval_current", "operation_cancelled"),
+            ("owner", "post_retrieval_current", "owner_changed"),
+            ("target", "post_retrieval_target_check", "target_check_failed"),
+        ):
+            with self.subTest(failure=failure):
+                retrieved = False
+                original_owner = owner(self.service.home)
+
+                def retrieve(*args):
+                    nonlocal retrieved
+                    retrieved = True
+                    if failure == "producer":
+                        raise RetrievalRefused("subprocess_exit", 7)
+                    if failure == "unknown_producer":
+                        raise ValueError("SYNTHETIC_PRIVATE")
+                    if failure == "current":
+                        self.service.closed = True
+
+                def check():
+                    if retrieved and failure == "target":
+                        raise ValueError("SYNTHETIC_PRIVATE")
+
+                def bound_owner(home):
+                    return None if retrieved and failure == "owner" else original_owner
+
+                target = SimpleNamespace(started=False, check=check, close=lambda: None)
+                self.facility.retrieve = retrieve
+                with (
+                    patch("secure_entry.payment.owner", side_effect=bound_owner),
+                    patch(
+                        "tools.browser_supervisor.SUPERVISOR_REGISTRY.capture",
+                        return_value=SimpleNamespace(is_valid=lambda: True),
+                    ),
+                    patch(
+                        "tools.approval_prompt.request_elicitation_consent",
+                        return_value="accept",
+                    ),
+                    patch("secure_entry.payment.Target", return_value=target),
+                    patch("secure_entry.payment.PrivateCard") as inbox,
+                ):
+                    raw = self.facility.fill(self.args, task_id="synthetic-payment")
+                self.service.closed = False
+                result = json.loads(raw)
+                self.assertEqual(result.get("stage"), expected_stage)
+                self.assertEqual(result.get("refusal"), expected_reason)
+                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.3")
+                self.assertEqual(
+                    result.get("subprocess_exit_status"),
+                    7 if failure == "producer" else None,
+                )
+                self.assertNotIn("SYNTHETIC_PRIVATE", raw)
+                inbox.return_value.__enter__.return_value.consume.assert_not_called()
+
     def test_existing_public_capture_needs_no_legacy_local_metadata(self):
         from types import SimpleNamespace
 

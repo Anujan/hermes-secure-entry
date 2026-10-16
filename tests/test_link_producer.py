@@ -23,12 +23,52 @@ class LinkProducerTests(unittest.TestCase):
             )
             self.assertEqual(output.read_text(), "synthetic-private-data")
 
+    def test_fixed_producer_diagnostics_never_include_process_output(self):
+        cases = [
+            (
+                'import sys; print("SYNTHETIC_PRIVATE"); sys.exit(7)',
+                "subprocess_exit",
+                7,
+            ),
+            ('print("SYNTHETIC_PRIVATE")', "output_json_invalid", None),
+            ('print("[]")', "output_envelope_mismatch", None),
+            (
+                'print(\'{"id":"lsrq_other","status":"approved"}\')',
+                "output_id_mismatch",
+                None,
+            ),
+            (
+                'print(\'{"id":"lsrq_synthetic","status":"pending"}\')',
+                "output_status_mismatch",
+                None,
+            ),
+            ('print("x" * 65537)', "output_too_large", None),
+        ]
+        for script, reason, exit_status in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as root:
+                with self.assertRaises(ValueError) as caught:
+                    payment.retrieve_card(
+                        [sys.executable, "-c", script],
+                        "lsrq_synthetic",
+                        Path(root) / "card",
+                    )
+                self.assertEqual(getattr(caught.exception, "category", None), reason)
+                self.assertEqual(
+                    getattr(caught.exception, "exit_status", None), exit_status
+                )
+                self.assertEqual(str(caught.exception), "link_retrieval_refused")
+                self.assertNotIn("SYNTHETIC_PRIVATE", repr(caught.exception))
+
     def test_singleton_approved_list_from_cli_0274_accepted(self):
         with tempfile.TemporaryDirectory() as root:
             output = Path(root) / "card.json"
             self.assertIsNone(
                 payment.retrieve_card(
-                    [sys.executable, "-c", 'print(\'[{"id":"lsrq_synthetic","status":"approved"}]\')'],
+                    [
+                        sys.executable,
+                        "-c",
+                        'print(\'[{"id":"lsrq_synthetic","status":"approved"}]\')',
+                    ],
                     "lsrq_synthetic",
                     output,
                 )
@@ -60,13 +100,13 @@ class LinkProducerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             script = Path(root) / "synthetic_cli.py"
             script.write_text(
-                'import json,sys,pathlib\na=sys.argv[1:]\n'
+                "import json,sys,pathlib\na=sys.argv[1:]\n"
                 'assert a[:3]==["spend-request","retrieve","lsrq_synthetic"]\n'
                 'assert a[3:5]==["--include","card"]\n'
                 'assert a[5]=="--output-file"\n'
                 'assert a[-2:]==["--format","json"]\n'
-                f'artifact={artifact!r}\n'
-                'pathlib.Path(a[6]).write_text(json.dumps(artifact))\n'
+                f"artifact={artifact!r}\n"
+                "pathlib.Path(a[6]).write_text(json.dumps(artifact))\n"
                 'print(json.dumps([{"id":artifact["spend_request_id"],'
                 '"status":"approved","card_output_file":a[6]}]))\n'
             )
