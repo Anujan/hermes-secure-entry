@@ -12,7 +12,7 @@ class Bridge:
 
     def bound_owner(self, context):
         # Shared owner admission also fences metadata tools and add-login.
-        bound = owner(self.service.home)
+        bound = owner(self.service.home, context.get('session_id') or '')
         if not context.get('session_id') or context['session_id'] != bound[-1]:
             raise ValueError('session correlation mismatch')
         if self.isolation != 'in_process':

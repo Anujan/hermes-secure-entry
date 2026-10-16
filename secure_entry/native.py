@@ -21,7 +21,7 @@ def validate_origin(origin):
     return origin
 
 
-def owner(expected_home):
+def owner(expected_home, host_session_id=''):
     from hermes_constants import get_hermes_home
     from gateway.session_context import get_session_env
     from tools.approval_context import (_is_cron_approval_context, _is_single_query_approval_context,
@@ -36,6 +36,11 @@ def owner(expected_home):
     if (home != str(Path(expected_home).resolve()) or values[0] not in ('photon', 'discord', 'telegram')
             or not (values[1] == 'dm' or (values[0] == 'discord' and values[1] == 'thread'))):
         raise ValueError('Secure entry requires a bound supported DM and matching profile')
+    # Gateway turns bind an empty task-local session id; fall back to the id the host
+    # passes to tool middleware (never a model-supplied value).
+    task_local_id = values[-1]
+    if not task_local_id and host_session_id:
+        values = values[:-1] + (host_session_id,)
     if not values[-1]:
         raise MissingSessionID('Missing session ID binding')
     if not all(values[2:]):
@@ -45,6 +50,8 @@ def owner(expected_home):
     import contextvars
     local = {var.name: value for var, value in contextvars.copy_context().items()}
     for key, value in zip(('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'), values):
+        if key == 'ID' and not task_local_id and value == host_session_id:
+            continue
         if local.get('HERMES_SESSION_' + key) != value:
             raise MissingSessionBinding('Missing task-local identity')
     from hermes_constants import profile_name_for_home
