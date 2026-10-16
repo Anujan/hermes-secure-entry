@@ -34,7 +34,7 @@ def owner(expected_home):
     values = tuple(get_session_env('HERMES_SESSION_' + key, '') for key in
                    ('PLATFORM', 'CHAT_TYPE', 'CHAT_ID', 'USER_ID', 'KEY', 'ID'))
     if (home != str(Path(expected_home).resolve()) or values[0] not in ('photon', 'discord', 'telegram')
-            or values[1] != 'dm'):
+            or not (values[1] == 'dm' or (values[0] == 'discord' and values[1] == 'thread'))):
         raise ValueError('Secure entry requires a bound supported DM and matching profile')
     if not values[-1]:
         raise MissingSessionID('Missing session ID binding')
