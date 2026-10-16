@@ -1,0 +1,9 @@
+# 0.5.3: tolerate payment-widget presentation updates
+
+The generic CHILD observer previously invalidated on every child-list or text mutation anywhere in the iframe. A synthetic real-Chrome cross-origin OOPIF regression reproduced refusal immediately after the first PAN setter when an input handler replaced a sibling brand logo, updated validation text/class, and set an ancestor validation class. The regression failed before the fix and passes afterward.
+
+The observer now distinguishes retained authority from presentation: it retains all control ancestors and refuses removal/reparenting, security/semantic attribute mutations (even when synchronously restored), control/form/base additions/removals, and select option changes. Unrelated logo/text/validation subtree updates and class changes are tolerated. Existing current-document, origin, control identity, form/group, usability, token and expected-value checks still apply before/after dispatch. Parent-frame authority logic is unchanged. No retry or retargeting was added; partial writes still report unknown/refusal and must not be treated as no-write.
+
+Tests cover the actual OOPIF brand/text/class flow, synchronous removal/reparent/restoration, control replacement, added-and-removed controls/forms, and restored autocomplete/type/name/id/form/disabled/readonly/required/pattern/maxlength, ancestor inert/hidden/style, and form action/method/id mutations after the first PAN write. Expiry remains empty on these refusals.
+
+Saved-card guest-name overwrite policy is deliberately unchanged: supplied name/postal mismatches still refuse, including under `preserve_unsupplied_billing`. This release addresses measured mutation invalidation only; it does not broaden Link's issued billing identity policy. No live card, user browser, installation or core change was used.

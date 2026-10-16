@@ -171,7 +171,7 @@ class PaymentBrowserTests(unittest.TestCase):
         })
         self.assertEqual(result, {
             "success": False, "status": "write_unknown", "stage": "write",
-            "payment_diagnostic_version": "0.5.2",
+            "payment_diagnostic_version": "0.5.3",
             "refusal": "initial_mismatch", "field": "cc-name", "written_fields": 0,
         })
 
@@ -248,7 +248,7 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
-                    payment_diagnostic_version="0.5.2",
+                    payment_diagnostic_version="0.5.3",
                 ),
             )
 
@@ -436,6 +436,70 @@ class PaymentBrowserTests(unittest.TestCase):
         self.assertEqual(self.page.frames[1].evaluate("window.updates"), 6)
         self.assertNotIn("Synthetic", json.dumps(result))
 
+    def test_pan_brand_and_sibling_validation_updates_preserve_authority(self):
+        target = self.target_for_html(
+            '<form><section><input autocomplete="cc-number"><span id="brand">Card</span>'
+            '<span id="validation" class="pending">Pending</span></section>'
+            '<section><input autocomplete="cc-exp"></section></form>'
+        )
+        self.assertNotEqual(target.csid, target.psid)  # actual Chrome OOPIF
+        self.page.frames[1].evaluate('''() => {
+          document.querySelector('input').addEventListener('input', e => {
+            document.querySelector('#brand').innerHTML='<svg class="visa"><title>Visa</title></svg>';
+            const validation=document.querySelector('#validation');
+            validation.className='valid';
+            validation.firstChild.data='Valid card';
+            e.target.closest('section').classList.add('validated');
+          });
+        }''')
+        self.assertEqual(target.fill(dict(number="4242424242424242", exp_month=12,
+                                         exp_year=2035))['filled_fields'], 2)
+        self.assertEqual(self.page.frames[1].locator('#validation').inner_text(), 'Valid card')
+
+    def test_child_authority_mutations_remain_sticky_after_pan(self):
+        changes = [
+            'const p=e.parentNode; e.remove(); p.appendChild(e)',
+            'const p=e.parentNode; document.body.appendChild(e); p.appendChild(e)',
+            'const p=e.parentNode, g=p.parentNode; p.remove(); g.appendChild(p)',
+            'const f=e.form, p=f.parentNode; f.remove(); p.appendChild(f)',
+            "e.outerHTML=e.outerHTML",
+            "const n=document.createElement('input'); e.after(n); n.remove()",
+            "const n=document.createElement('form'); document.body.appendChild(n); n.remove()",
+            "e.parentNode.className='hidden'; e.parentNode.style.display='none'",
+        ]
+        for selector, attribute, value in (
+            ('input', 'autocomplete', 'cc-csc'), ('input', 'type', 'hidden'),
+            ('input', 'name', 'different'), ('input', 'id', 'different'),
+            ('input', 'form', 'different'), ('input', 'disabled', ''),
+            ('input', 'readonly', ''), ('input', 'required', ''),
+            ('input', 'pattern', '.*'), ('input', 'maxlength', '1'),
+            ('section', 'inert', ''), ('section', 'hidden', ''),
+            ('section', 'style', 'display:none'), ('form', 'action', '/changed'),
+            ('form', 'method', 'post'), ('form', 'id', 'changed'),
+        ):
+            changes.append(f'''const n=document.querySelector({json.dumps(selector)});
+                const old=n.getAttribute({json.dumps(attribute)});
+                n.setAttribute({json.dumps(attribute)},{json.dumps(value)});
+                if(old===null)n.removeAttribute({json.dumps(attribute)});
+                else n.setAttribute({json.dumps(attribute)},old);''')
+        for change in changes:
+            with self.subTest(change=change):
+                target = self.target_for_html(
+                    '<form><section><input autocomplete="cc-number"></section>'
+                    '<section><input autocomplete="cc-exp"></section></form>'
+                )
+                self.page.frames[1].evaluate('''change => {
+                  document.querySelector('input').addEventListener('input', event => {
+                    const e=event.target; new Function('e',change)(e);
+                  });
+                }''', change)
+                with self.assertRaises(payment_browser.WriteRefused) as caught:
+                    target.fill(dict(number="4242424242424242", exp_month=12, exp_year=2035))
+                self.assertEqual(caught.exception.category, 'invalidated')
+                self.assertEqual(caught.exception.written, 1)
+                self.assertEqual(self.page.frames[1].locator('[autocomplete=cc-exp]').input_value(), '')
+                target.close()
+
     def test_benign_validation_attributes_and_pan_grouping(self):
         self.page.frames[
             1
@@ -580,7 +644,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 success=True,
                 status="filled",
                 filled_fields=4,
-                payment_diagnostic_version="0.5.2",
+                payment_diagnostic_version="0.5.3",
             ),
         )
         self.assertNotIn(
@@ -875,7 +939,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 "success": True,
                 "status": "filled",
                 "filled_fields": 4,
-                "payment_diagnostic_version": "0.5.2",
+                "payment_diagnostic_version": "0.5.3",
             },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
@@ -963,7 +1027,7 @@ class PaymentBrowserTests(unittest.TestCase):
             {
                 "success": False,
                 "status": "payment_declined",
-                "payment_diagnostic_version": "0.5.2",
+                "payment_diagnostic_version": "0.5.3",
             },
         )
         self.assertEqual(

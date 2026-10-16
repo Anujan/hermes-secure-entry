@@ -63,7 +63,22 @@ CHILD = r"""(() => {
  if(fields.some((e,i)=>!usable(e) || (tokens[i].startsWith('cc-') && tokens[i]!=='cc-name' && e.value)))throw Error('unsupported');
  const initial=fields.map(e=>e.value);
  let changed=false, used=false;
- const securityRecords=records=>records.some(r=>r.type!=='attributes' || !['aria-invalid','aria-describedby','aria-errormessage'].includes(r.attributeName));
+ // Retain every control/group ancestor, not unrelated presentation subtrees.
+ // Mutation records make removal/reparent and security changes sticky even if
+ // restored synchronously before the next check. Class is widget presentation;
+ // actual visibility/usability is still checked before and after each event.
+ const lineages=fields.map(e=>{const a=[];for(;e;e=e.parentNode)a.push(e);return a;});
+ const retained=new Set(lineages.flat());
+ const selects=fields.filter(e=>e.tagName==='SELECT');
+ const semanticNode=n=>n.nodeType===1 && (n.matches('input,select,textarea,form,base') || n.querySelector('input,select,textarea,form,base'));
+ const securityRecords=records=>records.some(r=>{
+   if(r.type==='attributes')return (retained.has(r.target) ||
+     selects.some(e=>e.contains(r.target)) || r.target.tagName==='BASE') &&
+     !['class','aria-invalid','aria-describedby','aria-errormessage'].includes(r.attributeName);
+   if(r.type==='characterData')return selects.some(e=>e.contains(r.target));
+   return Array.from(r.removedNodes).some(n=>retained.has(n) || semanticNode(n)) ||
+     Array.from(r.addedNodes).some(semanticNode) || selects.some(e=>e.contains(r.target));
+ });
  const observer=new MutationObserver(records=>{if(securityRecords(records))changed=true;});
  observer.observe(doc,{subtree:true,childList:true,attributes:true,characterData:true});
  const valid=()=>{if(securityRecords(observer.takeRecords()))changed=true;
