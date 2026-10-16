@@ -23,16 +23,90 @@ class LinkProducerTests(unittest.TestCase):
             )
             self.assertEqual(output.read_text(), "synthetic-private-data")
 
+    def test_singleton_approved_list_from_cli_0274_accepted(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "card.json"
+            self.assertIsNone(
+                payment.retrieve_card(
+                    [sys.executable, "-c", 'print(\'[{"id":"lsrq_synthetic","status":"approved"}]\')'],
+                    "lsrq_synthetic",
+                    output,
+                )
+            )
+
+    def test_cli_0274_schema_subprocess_to_private_consumer(self):
+        from secure_entry.payment_file import PrivateCard
+
+        # applyOutputFile in installed 0.27.4 dist/cli.js writes an object,
+        # removes card from stdout, then yields metadata (a singleton array).
+        artifact = {
+            "spend_request_id": "lsrq_synthetic",
+            "merchant_name": "Synthetic Merchant",
+            "merchant_url": "https://merchant.invalid/checkout",
+            "context": "Synthetic schema fixture only",
+            "created_at": 1800000000,
+            "card": {
+                "number": "4242424242424242",
+                "cvc": "123",
+                "exp_month": 12,
+                "exp_year": 2030,
+                "billing_address": {
+                    "name": "Synthetic Person",
+                    "line1": "1 Test St",
+                    "country": "US",
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as root:
+            script = Path(root) / "synthetic_cli.py"
+            script.write_text(
+                'import json,sys,pathlib\na=sys.argv[1:]\n'
+                'assert a[:3]==["spend-request","retrieve","lsrq_synthetic"]\n'
+                'assert a[3:5]==["--include","card"]\n'
+                'assert a[5]=="--output-file"\n'
+                'assert a[-2:]==["--format","json"]\n'
+                f'artifact={artifact!r}\n'
+                'pathlib.Path(a[6]).write_text(json.dumps(artifact))\n'
+                'print(json.dumps([{"id":artifact["spend_request_id"],'
+                '"status":"approved","card_output_file":a[6]}]))\n'
+            )
+            with PrivateCard(root) as inbox:
+                self.assertIsNone(
+                    payment.retrieve_card(
+                        [sys.executable, str(script)], "lsrq_synthetic", inbox.path
+                    )
+                )
+                self.assertEqual(
+                    inbox.consume("lsrq_synthetic", "https://merchant.invalid"),
+                    artifact["card"],
+                )
+                self.assertFalse(inbox.path.exists())
+
     def test_nonapproved_or_mismatched_request_never_accepted(self):
         for data in (
             {"id": "lsrq_synthetic", "status": "pending_approval"},
             {"id": "lsrq_other", "status": "approved"},
             {"status": "approved"},
             [],
+            [{"id": "lsrq_synthetic", "status": "approved"}] * 2,
+            [
+                {"id": "lsrq_synthetic", "status": "approved"},
+                {"id": "lsrq_other", "status": "approved"},
+            ],
+            [{"id": "lsrq_synthetic", "status": "pending_approval"}],
+            [{"id": "lsrq_other", "status": "approved"}],
+            [{"status": "approved"}],
+            [None],
+            [False],
+            [1],
+            ["approved"],
+            [[{"id": "lsrq_synthetic", "status": "approved"}]],
+            None,
+            "approved",
         ):
             with self.subTest(data=data), tempfile.TemporaryDirectory() as root:
                 output = Path(root) / "card.json"
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "^link_retrieval_refused$"):
                     payment.retrieve_card(
                         [sys.executable, "-c", "print(" + repr(json.dumps(data)) + ")"],
                         "lsrq_synthetic",

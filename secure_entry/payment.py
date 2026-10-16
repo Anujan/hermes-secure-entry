@@ -56,6 +56,12 @@ def retrieve_card(command, request_id, output):
         if result.returncode or len(result.stdout) > 65536:
             raise ValueError("link_retrieval_refused")
         metadata = json.loads(result.stdout)
+        # Link CLI 0.27.4 streams retrieve results as a JSON array. Require
+        # exactly one result; never select an approved row from ambiguous output.
+        if isinstance(metadata, list):
+            if len(metadata) != 1:
+                raise ValueError("link_retrieval_refused")
+            metadata = metadata[0]
         if (
             not isinstance(metadata, dict)
             or metadata.get("id") != request_id

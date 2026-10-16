@@ -18,6 +18,12 @@ References:
 - https://github.com/browser-use/browser-use/blob/main/examples/features/sensitive_data.py
 - https://hermes-agent.nousresearch.com/docs/developer-guide/plugins
 
+## Pinned CLI JSON contract (0.4.1 fix)
+
+Inspected installed `@stripe/link-cli@0.27.4` `dist/cli.js` without executing wallet operations: `spend-request retrieve` is an async generator (lines 9671–9742), whose JSON output is an array of records. The adapter accepts exactly one approved record matching the requested ID, or the legacy single object. Empty/multi-record arrays, nested arrays, non-object records, wrong IDs and unapproved statuses are refused.
+
+`applyOutputFile` (lines 9284–9299) writes a **single object**, not an array: `{spend_request_id, merchant_name, merchant_url, context, created_at, card}`. It removes `card` from stdout metadata and adds `card_output_file`. The existing private-file consumer already matches that structure. A synthetic subprocess exercises the object/array split through the actual adapter and Windows private-file consumer, including billing and delete-on-close cleanup. No live credentials or checkout were accessed for this fix.
+
 ## Registered native facility
 
 `secure_entry_payment_fill(parent, frame, merchant_origin, frame_origin, spend_request_id)` accepts **metadata only**. The exact parent must exist on the native task supervisor's captured connection; the direct iframe must be owned by that parent. The authenticated same-profile supported DM, user/chat/session identity, native task and service lifecycle generation are checked. The existing public native capture pins the supervisor/WebSocket generation. No model-supplied endpoint, file path, script, selector, card or credential argument exists.
