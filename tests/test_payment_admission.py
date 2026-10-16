@@ -49,6 +49,7 @@ class PaymentAdmissionTests(unittest.TestCase):
 
         for failure, expected_stage, expected_reason in (
             ("private", "private_file", "billing_field_type"),
+            ("private_owner", "private_file", "owner"),
             ("unknown_private", "private_file", "private_file_failed"),
             ("producer", "link_retrieval_producer", "subprocess_exit"),
             ("unknown_producer", "link_retrieval_producer", "producer_failed"),
@@ -93,6 +94,10 @@ class PaymentAdmissionTests(unittest.TestCase):
                     patch("secure_entry.payment.PrivateCard") as inbox,
                 ):
                     from secure_entry.payment_file import PrivateFileRefused
+                    if failure == "private_owner":
+                        refusal = PrivateFileRefused("owner", owner_class="other")
+                        refusal.object_type = "file"
+                        inbox.return_value.__enter__.return_value.consume.side_effect = refusal
                     if failure in {"private", "unknown_private"}:
                         inbox.return_value.__enter__.return_value.consume.side_effect = (
                             PrivateFileRefused("billing_field_type")
@@ -104,13 +109,16 @@ class PaymentAdmissionTests(unittest.TestCase):
                 result = json.loads(raw)
                 self.assertEqual(result.get("stage"), expected_stage)
                 self.assertEqual(result.get("refusal"), expected_reason)
-                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.5")
+                if failure == "private_owner":
+                    self.assertEqual(result.get("private_object"), "file")
+                    self.assertEqual(result.get("owner_class"), "other")
+                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.6")
                 self.assertEqual(
                     result.get("subprocess_exit_status"),
                     7 if failure == "producer" else None,
                 )
                 self.assertNotIn("SYNTHETIC_PRIVATE", raw)
-                if failure in {"private", "unknown_private"}:
+                if failure in {"private", "unknown_private", "private_owner"}:
                     inbox.return_value.__enter__.return_value.consume.assert_called_once()
                 else:
                     inbox.return_value.__enter__.return_value.consume.assert_not_called()

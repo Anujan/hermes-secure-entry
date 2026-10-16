@@ -104,6 +104,35 @@ RED/GREEN covered malformed nested shapes and secret-bearing unexpected errors,
 then model-visible fixed diagnostics. Isolated full suite: **182 tests passed**
 in 111.262s. No wallet, live browser, installation or runtime configuration changed.
 
+## Windows default-owner compatibility (0.4.6)
+
+Windows assigns a newly created file the effective token's `TokenOwner`, which
+can be an owner-capable group rather than `TokenUser`. The consumer now queries
+the effective thread token first (process fallback only for ERROR_NO_TOKEN).
+It does **not** add Administrators or any other group to its accepted owner or
+DACL principals. After validating the existing private user+SYSTEM DACL and
+file shape through an exclusive no-follow handle, a differing owner is eligible
+for normalization **only** when it equals that token's native `TokenOwner`.
+`SetSecurityInfo` narrows it to `TokenUser` through that same handle; readback
+must confirm the user owner and every unchanged DACL ACE before reading data.
+Failure to normalize refuses. No privilege is enabled by production code.
+Foreign owners and foreign DACL principals still refuse, without repair.
+
+This removes existing group-owner implicit WRITE_DAC authority rather than
+accepting it. It does not retroactively prove privacy before handle acquisition
+or claim protection from the same OS user/admin; the protected parent directory,
+exclusive handle and existing Windows threat boundary remain essential.
+Diagnostics add only fixed `private_object` (directory/file), `owner_class`
+(user/system/token_default/administrators/other), and `owner_normalize` refusal;
+no identity, SID, path, exception or private data is returned.
+
+Strict RED reproduced the actual `owner` refusal using a duplicated kernel
+impersonation token whose TokenOwner is a real owner-capable group and a file
+created by Windows under that token. GREEN covers handle normalization/readback,
+full consumption of newly created default-owner files, directory normalization,
+foreign-owner refusal, and no normalization of a foreign-principal DACL.
+No wallet/API/credential reads or browser access were used for this fix.
+
 ## Registered native facility
 
 `secure_entry_payment_fill(parent, frame, merchant_origin, frame_origin, spend_request_id)` accepts **metadata only**. The exact parent must exist on the native task supervisor's captured connection; the direct iframe must be owned by that parent. The authenticated same-profile supported DM, user/chat/session identity, native task and service lifecycle generation are checked. The existing public native capture pins the supervisor/WebSocket generation. No model-supplied endpoint, file path, script, selector, card or credential argument exists.

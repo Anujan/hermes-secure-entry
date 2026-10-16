@@ -15,7 +15,7 @@ from .payment_file import PrivateCard, PrivateFileRefused
 from .payment_browser import BindingRefused, Target
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.4.5"
+PAYMENT_DIAGNOSTIC_VERSION = "0.4.6"
 
 
 class RetrievalRefused(ValueError):
@@ -270,6 +270,11 @@ class LocalPayment:
                     and exc.category in PrivateFileRefused.CATEGORIES
                     else "private_file_failed"
                 }
+                if isinstance(exc, PrivateFileRefused):
+                    if exc.object_type in {"directory", "file"}:
+                        diagnostic["private_object"] = exc.object_type
+                    if exc.owner_class in PrivateFileRefused.OWNER_CLASSES:
+                        diagnostic["owner_class"] = exc.owner_class
             elif stage == "link_retrieval_producer":
                 diagnostic = {"refusal": "producer_failed"}
             elif stage == "native_consent":

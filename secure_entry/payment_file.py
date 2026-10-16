@@ -22,12 +22,16 @@ class PrivateFileRefused(ValueError):
         "request_match", "merchant_origin", "card_type", "card_number_type",
         "card_number_format", "cvc_type_format", "expiry_type_range",
         "billing_type", "billing_field_type", "billing_field_format",
-        "private_file_failed",
+        "private_file_failed", "owner_normalize",
     })
 
-    def __init__(self, category):
+    def __init__(self, category, *, owner_class=None):
         super().__init__("private_file_refused")
         self.category = category if category in self.CATEGORIES else "private_file_failed"
+        self.owner_class = owner_class if owner_class in self.OWNER_CLASSES else None
+        self.object_type = None
+
+    OWNER_CLASSES = frozenset({"user", "system", "token_default", "administrators", "other"})
 
 
 @contextmanager
@@ -48,12 +52,22 @@ def _windows():
     return win32api, win32con, win32file, win32security, pywintypes
 
 
-def _identity():
+def _token_identity():
+    """Use the effective token; only ERROR_NO_TOKEN permits process fallback."""
     api, con, _, sec, _ = _windows()
-    with _handle(
-        sec.OpenProcessToken(api.GetCurrentProcess(), con.TOKEN_QUERY)
-    ) as token:
-        return sec.GetTokenInformation(token, sec.TokenUser)[0]
+    try:
+        token = sec.OpenThreadToken(api.GetCurrentThread(), con.TOKEN_QUERY, True)
+    except Exception as exc:
+        if getattr(exc, "winerror", None) != 1008:
+            raise
+        token = sec.OpenProcessToken(api.GetCurrentProcess(), con.TOKEN_QUERY)
+    with _handle(token):
+        return (sec.GetTokenInformation(token, sec.TokenUser)[0],
+                sec.GetTokenInformation(token, sec.TokenOwner))
+
+
+def _identity():
+    return _token_identity()[0]
 
 
 def _check_acl(handle):
@@ -63,10 +77,9 @@ def _check_acl(handle):
         sec.SE_FILE_OBJECT,
         sec.OWNER_SECURITY_INFORMATION | sec.DACL_SECURITY_INFORMATION,
     )
-    allowed = {sec.ConvertSidToStringSid(_identity()), "S-1-5-18"}
+    user, default_owner = _token_identity()
+    allowed = {sec.ConvertSidToStringSid(user), "S-1-5-18"}
     acl = sd.GetSecurityDescriptorDacl()
-    if sec.ConvertSidToStringSid(sd.GetSecurityDescriptorOwner()) not in allowed:
-        raise PrivateFileRefused("owner")
     if acl is None:
         raise PrivateFileRefused("windows_acl")
     for i in range(acl.GetAceCount()):
@@ -75,6 +88,29 @@ def _check_acl(handle):
             header[0] != con.ACCESS_ALLOWED_ACE_TYPE
             or sec.ConvertSidToStringSid(sid) not in allowed
         ):
+            raise PrivateFileRefused("windows_acl")
+    owner = sd.GetSecurityDescriptorOwner()
+    if sec.ConvertSidToStringSid(owner) not in allowed:
+        if owner != default_owner:
+            classification = "administrators" if sec.ConvertSidToStringSid(owner) == "S-1-5-32-544" else "other"
+            raise PrivateFileRefused("owner", owner_class=classification)
+        # Windows can assign an enabled token group as the creator's default
+        # owner. Never accept that group's implicit WRITE_DAC authority: narrow
+        # ownership to TokenUser on the same exclusive handle before any read.
+        # DACL validation precedes this write; no foreign owner is repaired.
+        try:
+            sec.SetSecurityInfo(handle, sec.SE_FILE_OBJECT,
+                                sec.OWNER_SECURITY_INFORMATION, user, None, None, None)
+        except Exception:
+            raise PrivateFileRefused("owner_normalize", owner_class="token_default") from None
+        verified = sec.GetSecurityInfo(handle, sec.SE_FILE_OBJECT,
+                                      sec.OWNER_SECURITY_INFORMATION | sec.DACL_SECURITY_INFORMATION)
+        if verified.GetSecurityDescriptorOwner() != user:
+            raise PrivateFileRefused("owner")
+        # Changing owner must not change any DACL ACE.
+        after = verified.GetSecurityDescriptorDacl()
+        if (after is None or after.GetAceCount() != acl.GetAceCount()
+                or any(after.GetAce(i) != acl.GetAce(i) for i in range(acl.GetAceCount()))):
             raise PrivateFileRefused("windows_acl")
 
 
@@ -101,6 +137,7 @@ class PrivateCard:
 
     def consume(self, request_id, merchant_origin):
         category = "windows_api"
+        object_type = None
         try:
             _, con, file, _, _ = _windows()
             if self.closed:
@@ -109,7 +146,7 @@ class PrivateCard:
             with _handle(
                 file.CreateFile(
                     str(self.directory),
-                    con.READ_CONTROL,
+                    con.READ_CONTROL | con.WRITE_OWNER,
                     0,
                     None,
                     con.OPEN_EXISTING,
@@ -124,12 +161,13 @@ class PrivateCard:
                 ):
                     raise PrivateFileRefused("directory_reparse")
                 category = "windows_acl"
+                object_type = "directory"
                 _check_acl(directory)
                 category = "file_open"
                 with _handle(
                     file.CreateFile(
                         str(self.path),
-                        con.GENERIC_READ | con.DELETE | con.READ_CONTROL,
+                        con.GENERIC_READ | con.DELETE | con.READ_CONTROL | con.WRITE_OWNER,
                         0,
                         None,
                         con.OPEN_EXISTING,
@@ -140,8 +178,7 @@ class PrivateCard:
                 ) as handle:
                     category = "file_info"
                     info = file.GetFileInformationByHandle(handle)
-                    category = "windows_acl"
-                    _check_acl(handle)
+                    object_type = "file"
                     if (
                         info[0]
                         & (
@@ -154,6 +191,8 @@ class PrivateCard:
                         raise PrivateFileRefused("linkcount")
                     if info[5] or info[6] > 16384:
                         raise PrivateFileRefused("size")
+                    category = "windows_acl"
+                    _check_acl(handle)
                     category = "read"
                     _, raw = file.ReadFile(handle, 16385)
                     category = "json"
@@ -216,7 +255,8 @@ class PrivateCard:
                             )
                         }
                     return result
-        except PrivateFileRefused:
+        except PrivateFileRefused as exc:
+            exc.object_type = object_type
             raise
         except Exception:
             raise PrivateFileRefused(category) from None
