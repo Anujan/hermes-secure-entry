@@ -1,9 +1,12 @@
-"""Native local Link CLI payment source; no vault persistence or purchase submit.
+"""Retained native payment consumer: local Link or site-bound native vault card.
 
-The only exported handler is registered with PluginContext, not a generic secret
-script executor. Authenticated owner admission, native vault-payment consent,
-retained CapturedCDP, native takeover fences, private inbox and redaction compose
-one synchronous operation. Real Link authorization remains independently required.
+Only registered metadata-only handlers invoke this consumer; ``card_source`` is
+an internal plugin adapter, never a model-selected callable or script.
+Authenticated owner admission, native vault-payment consent, retained
+CapturedCDP, native takeover fences and redaction compose one synchronous fill.
+Link retains its protected private-file handoff and independent authorization.
+Saved native cards retain their merchant binding and explicit cleanup handle.
+Neither route submits, purchases or deletes automatically.
 """
 
 import json
@@ -15,7 +18,7 @@ from .payment_file import PrivateCard, PrivateFileRefused
 from .payment_browser import BindingRefused, Target
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.4.6"
+PAYMENT_DIAGNOSTIC_VERSION = "0.5.0"
 
 
 class RetrievalRefused(ValueError):
@@ -111,7 +114,8 @@ def retrieve_card(command, request_id, output):
 
 
 class LocalPayment:
-    def __init__(self, service, command, *, retrieve=None):
+    def __init__(self, service, command, *, retrieve=None, card_source=None):
+        self.card_source = card_source
         self.service, self.command, self.retrieve = (
             service,
             command,
@@ -132,7 +136,7 @@ class LocalPayment:
 
             if (
                 isolation_mode() != "in_process"
-                or not self.command
+                or (not self.command and self.card_source is None)
                 or self.retrieve is None
             ):
                 raise ValueError("facility_unavailable")
@@ -143,10 +147,10 @@ class LocalPayment:
             bound = owner(self.service.home)
             merchant = validate_origin(args["merchant_origin"])
             provider = validate_origin(args["frame_origin"])
-            rid = args["spend_request_id"]
-            if not isinstance(rid, str) or not re.fullmatch(
+            rid = self.card_source.identifier(args, merchant) if self.card_source else args["spend_request_id"]
+            if self.card_source is None and (not isinstance(rid, str) or not re.fullmatch(
                 r"lsrq_[A-Za-z0-9_]{1,100}", rid
-            ):
+            )):
                 raise ValueError("invalid_request")
             task = kwargs.get("task_id")
             if not isinstance(task, str) or not task:
@@ -199,11 +203,14 @@ class LocalPayment:
                 # Genuine existing native surface; no approval callbacks installed
                 # or forged. Photon/gateway notification belongs to the host.
                 verdict = request_elicitation_consent(
+                    f"Fill saved payment on merchant {merchant}; payment frame {provider}; handle {rid}" if self.card_source else
                     f"Fill Link payment on merchant {merchant}; payment frame {provider}; request {rid}",
+                    "Enter the site-bound saved card into this exact authorized merchant/payment-frame pair. "
+                    "This does not submit, reserve or purchase. Card remains saved; explicitly delete after verifying checkout outcome." if self.card_source else
                     "Enter the approved one-time Link card into this exact checkout document. "
                     "This does not submit or purchase. No card is saved in the vault.",
                     surface="vault-payment",
-                    title="Confirm local Link card fill?",
+                    title="Confirm saved card fill?" if self.card_source else "Confirm local Link card fill?",
                 )
                 # Credit only host-recorded, bounded human waiting during this
                 # actual native consent call, never arbitrary wall-clock stalls.
@@ -217,37 +224,41 @@ class LocalPayment:
                 current()
                 stage = "postconsent_target"
                 target.check()
-                stage = "private_inbox"
-                root = Path(self.service.home) / "cache"
-                root.mkdir(parents=True, exist_ok=True)
-                with PrivateCard(root) as inbox:
-                    stage = "link_retrieval_producer"
-                    self.retrieve(self.command, rid, inbox.path)
-                    stage = "post_retrieval_current"
-                    current()
-                    stage = "post_retrieval_target_check"
-                    target.check()
-                    stage = "private_file"
-                    card = inbox.consume(rid, merchant)
-                    for value in [
+                if self.card_source:
+                    stage = "vault_card_resolve"
+                    card = self.card_source.load(rid, merchant)
+                else:
+                    stage = "private_inbox"
+                    root = Path(self.service.home) / "cache"
+                    root.mkdir(parents=True, exist_ok=True)
+                    with PrivateCard(root) as inbox:
+                        stage = "link_retrieval_producer"
+                        self.retrieve(self.command, rid, inbox.path)
+                        stage = "post_retrieval_current"
+                        current()
+                        stage = "post_retrieval_target_check"
+                        target.check()
+                        stage = "private_file"
+                        card = inbox.consume(rid, merchant)
+                for value in [
                         *card.values(),
                         *card.get("billing_address", {}).values(),
                         f"{card['exp_month']:02d}/{card['exp_year'] % 100:02d}",
-                    ]:
-                        if isinstance(value, (str, int)) and str(value):
-                            register_vault_redaction_value(str(value))
-                    # Cover common formatting if a subsequent browser read echoes
-                    # a number with spaces/dashes, not just its original digits.
-                    number = card["number"]
-                    for sep in (" ", "-"):
-                        register_vault_redaction_value(
-                            sep.join(
-                                number[i : i + 4] for i in range(0, len(number), 4)
-                            )
+                ]:
+                    if isinstance(value, (str, int)) and str(value):
+                        register_vault_redaction_value(str(value))
+                # Cover common formatting if a subsequent browser read echoes
+                # a number with spaces/dashes, not just its original digits.
+                number = card["number"]
+                for sep in (" ", "-"):
+                    register_vault_redaction_value(
+                        sep.join(
+                            number[i : i + 4] for i in range(0, len(number), 4)
                         )
-                    current()
-                    stage = "write"
-                    return target.fill(card)
+                    )
+                current()
+                stage = "write"
+                return target.fill(card)
 
             result = operation()
             current()

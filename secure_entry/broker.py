@@ -6,6 +6,9 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+CARD_LIMITS = {'card_number':19, 'cardholder_name':160, 'exp_month':2,
+               'exp_year':4, 'cvc':4, 'billing_postal_code':32}
+
 
 @dataclass(repr=False)
 class Request:
@@ -33,7 +36,7 @@ class Broker:
         self.requests = {}
 
     def issue(self, kind, origin, owner, apply):
-        if kind not in ('login', 'code', 'unlock') or not origin or not owner:
+        if kind not in ('login', 'card', 'code', 'unlock') or not origin or not owner:
             raise ValueError('invalid request metadata')
         with self.lock:
             for token in list(self.requests):
@@ -86,8 +89,9 @@ class Broker:
                 self.finish(token, 'cancelled')
                 return self.status(token)
             required = (('identifier', 'password') if request.kind == 'login' else
+                        tuple(CARD_LIMITS) if request.kind == 'card' else
                         ('password',) if request.kind == 'unlock' else ('code',))
-            limits = {'identifier':320, 'password':4096, 'code':256}
+            limits = {'identifier':320, 'password':4096, 'code':256, **CARD_LIMITS}
             if (fields.get('action') != 'submit'
                     or any(not isinstance(fields.get(k), str) or not fields[k] or len(fields[k]) > limits[k] for k in required)):
                 return {'status': 'invalid_input'}
@@ -133,6 +137,16 @@ class Broker:
                                 '<input id="identifier" name="identifier" autocomplete="username" required maxlength="320">'
                                 '<label for="password">Website password</label>'
                                 '<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="4096">')
+                elif request.kind == 'card':
+                    content += ('<p>Save a payment card bound only to this merchant in the native encrypted vault. '
+                                'CVC is encrypted and saved under the native payment contract. '
+                                'This does not fill, submit, reserve, or pay. Request explicit deletion after verifying the checkout outcome.</p>')
+                    labels = {'card_number':'Card number', 'cardholder_name':'Cardholder name',
+                              'exp_month':'Expiry month (1-12)', 'exp_year':'Expiry year (YYYY)',
+                              'cvc':'CVC (saved encrypted)', 'billing_postal_code':'Billing postal code'}
+                    for name, limit in CARD_LIMITS.items():
+                        content += (f'<label for="{name}">{labels[name]}</label>'
+                                    f'<input id="{name}" name="{name}" type="password" autocomplete="off" required maxlength="{limit}">')
                 elif request.kind == 'unlock':
                     content += ('<p>Unlock the named password manager for the waiting native tool. '
                                 'This is your manager master password, not a website password. It is not saved by this plugin.</p>'

@@ -22,7 +22,9 @@ class RegistrationTests(unittest.TestCase):
             def on_unload(self, callback): self.cleanup.append(callback)
         ctx = Context()
         plugin.register(ctx)
-        self.assertEqual(set(ctx.tools), {'secure_entry_request', 'secure_entry_status', 'secure_entry_cancel', 'secure_entry_payment_fill'})
+        self.assertEqual(set(ctx.tools), {'secure_entry_request', 'secure_entry_status', 'secure_entry_cancel',
+            'secure_entry_payment_fill', 'secure_entry_card_fill', 'secure_entry_card_remove'})
+        self.assertIn('add_card', ctx.tools['secure_entry_request']['schema']['parameters']['properties']['operation']['enum'])
         self.assertIn('agent_loop_stopped', ctx.hooks)
         self.assertIn('tool_execution', ctx.middleware)
         for item in ctx.tools.values():
@@ -31,4 +33,5 @@ class RegistrationTests(unittest.TestCase):
             self.assertNotIn('code', properties)
             service = item['handler'].__self__
             self.assertIsNone(service.server)
-        for cleanup in ctx.cleanup: cleanup()
+        for cleanup in ctx.cleanup:
+            cleanup()

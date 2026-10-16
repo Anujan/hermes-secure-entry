@@ -1,9 +1,11 @@
 name: secure-entry
-version: 0.4.6
-description: Preview private DM login/OTP/unlock entry plus disabled-by-default native LOCAL Link private-card handoff. In-process only; payment candidate is not live verified.
+version: 0.5.0
+description: Private DM login/card entry and native OTP/unlock bridge, plus retained-browser Link or site-bound real-card fill and explicit verified card cleanup. In-process only; real-card route synthetic-tested, not live verified.
 license: MIT
 requires_hermes: ">=0.22.1,<0.22.2"
 provides_tools:
+  - secure_entry_card_fill
+  - secure_entry_card_remove
   - secure_entry_payment_fill
   - secure_entry_request
   - secure_entry_status

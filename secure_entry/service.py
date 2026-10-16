@@ -4,7 +4,7 @@ import secrets
 import threading
 from .broker import Broker
 from .server import Server
-from .native import MissingSessionID, MissingSessionBinding, add_login, owner, validate_origin
+from .native import MissingSessionID, MissingSessionBinding, add_login, add_card, owner, validate_origin
 
 BLOCKERS = {
     'update_login': 'Native VaultStore exposes add/remove, but no public atomic same-record update API. Existing records are not deleted.',
@@ -29,6 +29,11 @@ class Service:
 
     def payment_fill(self, args, **kwargs):
         return self.payment.fill(args, **kwargs)
+
+    def card_fill(self, args, **kwargs):
+        from .cards import VaultCardSource
+        from .payment import LocalPayment
+        return LocalPayment(self, [], card_source=VaultCardSource(self)).fill(args, **kwargs)
 
     def middleware(self, *, tool_name, args, next_call, **context):
         # Hermes 0.22.1 consolidates the native tools into browser_vault actions.
@@ -61,7 +66,7 @@ class Service:
                     'instruction':'Call the native tool without a handle. Only its inspected site can arm a private form. Never type a code in chat. Links are sent directly to this originating DM and may appear in history.'})
             if operation in BLOCKERS:
                 return json.dumps({'status':'unsupported_native_contract', 'operation':operation, 'reason':BLOCKERS[operation]})
-            if operation != 'add_login':
+            if operation not in ('add_login', 'add_card'):
                 return json.dumps({'status':'invalid_operation'})
             origin = validate_origin(args.get('origin', ''))
             from agent.vault_store import get_vault_store
@@ -75,13 +80,15 @@ class Service:
                         self.server = Server(self.broker, port=self.port).__enter__()
                     except OSError:
                         return json.dumps({'status':'unavailable', 'error_type':'listener_binding_failed'})
-                request = self.broker.issue('login', origin, bound, lambda fields: add_login(store, origin, fields))
+                apply = add_card if operation == 'add_card' else add_login
+                request = self.broker.issue('card' if operation == 'add_card' else 'login', origin, bound,
+                                            lambda fields: apply(store, origin, fields))
                 with self.broker.lock:
                     self.ids = {rid: item for rid, item in self.ids.items() if item[0] in self.broker.requests}
                 request_id = secrets.token_hex(16)
                 self.ids[request_id] = (request.token, bound)
             return json.dumps({'status':'pending', 'request_id':request_id, 'url':self.broker.url(request),
-                               'origin':origin, 'operation':'add_login', 'expires_in_seconds':600,
+                               'origin':origin, 'operation':operation, 'expires_in_seconds':600,
                                'instruction':'Send this one-use link only in this originating conversation. The page saves a new native vault item; it does not sign in.'})
         except MissingSessionID:
             return json.dumps({'status':'unavailable', 'error_type':'missing_session_id'})
@@ -98,6 +105,38 @@ class Service:
             return json.dumps(self.broker.status(token) if expected == bound else {'status':'unavailable'})
         except Exception:
             return json.dumps({'status':'unavailable'})
+
+    def remove_card(self, args, **kwargs):
+        """Explicit cleanup only; read back absence before claiming deletion."""
+        started = False
+        handle = args.get('handle', '')
+        try:
+            with self.lock:
+                if self.closed:
+                    raise ValueError('closed')
+                generation = self.generation
+            bound = owner(self.home)
+            origin = validate_origin(args.get('merchant_origin', ''))
+            import re
+            if not isinstance(handle, str) or not re.fullmatch(r'vault_[0-9a-f]{12}', handle):
+                raise ValueError('invalid_handle')
+            from agent.vault_store import get_vault_store
+            store = self.store_factory() if self.store_factory else get_vault_store()
+            with self.lock:
+                if self.closed or generation != self.generation or owner(self.home) != bound:
+                    raise ValueError('cancelled')
+                meta = store.get_meta(handle)
+                if meta is None:
+                    return json.dumps({'status':'absent', 'handle':handle})
+                if meta.kind != 'payment' or meta.origin != origin:
+                    return json.dumps({'status':'refused'})
+                started = True
+                store.remove_item(handle)
+                if store.get_meta(handle) is not None:
+                    raise ValueError('still_present')
+                return json.dumps({'status':'deleted', 'handle':handle})
+        except Exception:
+            return json.dumps({'status':'deletion_unknown' if started else 'refused'})
 
     def cancel(self, args, **kwargs):
         try:
