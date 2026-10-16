@@ -161,6 +161,73 @@ class PaymentBrowserTests(unittest.TestCase):
         self.assertTrue(target.attached)
         return target
 
+    def test_writer_initial_mismatch_reaches_native_result_without_values(self):
+        self.page.frames[1].evaluate('''document.body.innerHTML=
+            '<form><input autocomplete="cc-number"><input autocomplete="cc-exp">' +
+            '<input autocomplete="cc-name" value="Synthetic Guest"></form>' ''')
+        result, _ = self._run_facility(issued_card={
+            "number": "4242424242424242", "exp_month": 12, "exp_year": 2035,
+            "billing_address": {"name": "Synthetic Cardholder"},
+        })
+        self.assertEqual(result, {
+            "success": False, "status": "write_unknown", "stage": "write",
+            "payment_diagnostic_version": "0.5.2",
+            "refusal": "initial_mismatch", "field": "cc-name", "written_fields": 0,
+        })
+
+    def test_writer_invalidation_survives_postflight_check(self):
+        self.page.frames[1].evaluate('''() => {
+            document.body.innerHTML='<form><input autocomplete="cc-number"><input autocomplete="cc-exp"></form>';
+            document.querySelector('input').oninput=()=>document.body.setAttribute('data-mutated','yes');
+        }''')
+        result, _ = self._run_facility()
+        self.assertEqual(result.get("refusal"), "invalidated")
+        self.assertEqual(result.get("written_fields"), 1)
+        self.assertNotIn("field", result)
+
+    def test_writer_reason_categories_execute_generated_javascript(self):
+        base = '<form><input autocomplete="cc-number"><input autocomplete="cc-exp">{}</form>'
+        values = {"cc-number": "4242424242424242", "cc-exp": "12/35"}
+        cases = [
+            ("source_missing", "cc-name", '<input autocomplete="cc-name">', "", values, 0),
+            ("initial_mismatch", "billing postal-code", '<input autocomplete="billing postal-code" value="10001">', "", {**values, "billing postal-code": "10002"}, 0),
+            ("field_changed", "cc-exp", "", 'document.querySelectorAll("input")[1].value="other"', values, 0),
+            ("invalidated", None, "", 'document.body.setAttribute("data-changed","yes")', values, 0),
+            ("select_mismatch", "billing country", '<select autocomplete="billing country"><option value="">Choose</option><option value="US">Country</option></select>', "", {**values, "billing country": "CA"}, 0),
+            ("unchanged", "cc-number", "", 'document.querySelector("input").oninput=e=>e.target.value=""', values, 1),
+            ("expiry_format", "cc-exp", "", 'document.querySelectorAll("input")[1].oninput=e=>e.target.value="12/2035"', values, 2),
+            ("write_mismatch", "cc-number", "", 'document.querySelector("input").oninput=e=>e.target.value="different"', values, 1),
+        ]
+        for reason, field, extra, mutate, supplied, count in cases:
+            with self.subTest(reason=reason):
+                target = self.target_for_html(base.format(extra))
+                if mutate:
+                    self.page.frames[1].evaluate("() => {" + mutate + ";}")
+                result = target.invoke(target.csid, target.cg, "function(v){return this.write(v);}", (supplied,))
+                expected = {"written": count, "valid": False, "reason": reason}
+                if field:
+                    expected["field"] = field
+                self.assertEqual(result, expected)
+                refusal = payment_browser.WriteRefused(result)
+                self.assertEqual(refusal.category, reason)
+                self.assertEqual(refusal.field, field)
+                self.assertEqual(refusal.written, count)
+                target.close()
+        target = self.target_for_html(base.format(""))
+        self.assertTrue(target.invoke(target.csid, target.cg, "function(v){return this.write(v);}", (values,))["valid"])
+        self.assertEqual(target.invoke(target.csid, target.cg, "function(v){return this.write(v);}", (values,)),
+                         {"written": 0, "valid": False, "reason": "already_used"})
+
+    def test_writer_diagnostics_discard_untrusted_values(self):
+        failure = payment_browser.WriteRefused({
+            "reason": "SYNTHETIC_PRIVATE", "field": "SYNTHETIC_PRIVATE",
+            "written": True, "value": "SYNTHETIC_PRIVATE",
+        })
+        self.assertEqual(failure.category, "write_failed")
+        self.assertIsNone(failure.field)
+        self.assertIsNone(failure.written)
+        self.assertEqual(str(failure), "write_unknown")
+
     def test_binding_refusal_categories_are_safe(self):
         parent, frame = self.parent, self.frame
         for category in ("selected_parent", "frame_lineage", "form_layout"):
@@ -181,7 +248,7 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
-                    payment_diagnostic_version="0.5.1",
+                    payment_diagnostic_version="0.5.2",
                 ),
             )
 
@@ -513,7 +580,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 success=True,
                 status="filled",
                 filled_fields=4,
-                payment_diagnostic_version="0.5.1",
+                payment_diagnostic_version="0.5.2",
             ),
         )
         self.assertNotIn(
@@ -808,7 +875,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 "success": True,
                 "status": "filled",
                 "filled_fields": 4,
-                "payment_diagnostic_version": "0.5.1",
+                "payment_diagnostic_version": "0.5.2",
             },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
@@ -896,7 +963,7 @@ class PaymentBrowserTests(unittest.TestCase):
             {
                 "success": False,
                 "status": "payment_declined",
-                "payment_diagnostic_version": "0.5.1",
+                "payment_diagnostic_version": "0.5.2",
             },
         )
         self.assertEqual(

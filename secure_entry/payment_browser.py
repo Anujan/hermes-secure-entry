@@ -81,27 +81,64 @@ CHILD = r"""(() => {
      values.forEach((v,i)=>{if(v===undefined && tokens[i].startsWith('billing ') &&
        card.preserve_unsupplied_billing===true && fields[i].checkValidity())values[i]=initial[i];});
      values.forEach((v,i)=>{if(tokens[i]==='billing tel' && v===undefined)values[i]=initial[i] || undefined;});
-     if(used || !valid() || values.some(v=>typeof v!=='string') || fields.some((e,i)=>
-       e.value!==initial[i] || (initial[i] && initial[i]!==values[i]) ||
-       (e.tagName==='SELECT' && Array.from(e.options).filter(o=>o.value===values[i] && !o.disabled && !o.parentElement.disabled).length!==1)))return {written:0,valid:false};
-     used=true;let written=0;
+     let written=0;
+     const refuse=(reason,i)=>({written,valid:false,reason,...(i>=0?{field:tokens[i]}:{})});
+     if(used)return refuse('already_used');
+     if(!valid())return refuse('invalidated');
+     let index=values.findIndex(v=>typeof v!=='string');
+     if(index>=0)return refuse('source_missing',index);
+     index=fields.findIndex((e,i)=>e.value!==initial[i]);
+     if(index>=0)return refuse('field_changed',index);
+     index=fields.findIndex((e,i)=>initial[i] && initial[i]!==values[i]);
+     if(index>=0)return refuse('initial_mismatch',index);
+     index=fields.findIndex((e,i)=>e.tagName==='SELECT' &&
+       Array.from(e.options).filter(o=>o.value===values[i] && !o.disabled && !o.parentElement.disabled).length!==1);
+     if(index>=0)return refuse('select_mismatch',index);
+     used=true;
      const expected=initial.slice();
      for(let i=0;i<fields.length;i++){
-       if(!valid() || fields.some((e,j)=>e.value!==expected[j]))return {written,valid:false};
+       if(!valid())return refuse('invalidated');
+       index=fields.findIndex((e,j)=>e.value!==expected[j]);
+       if(index>=0)return refuse('field_changed',index);
        if(fields[i].value===values[i])continue;
        setters[fields[i].tagName].call(fields[i],values[i]);written++;
        expected[i]=values[i];
        fields[i].dispatchEvent(new Event('input',{bubbles:true}));
-       if(!valid())return {written,valid:false};
+       if(!valid())return refuse('invalidated');
        fields[i].dispatchEvent(new Event('change',{bubbles:true}));
-       if(!valid())return {written,valid:false};
+       if(!valid())return refuse('invalidated');
        const actual=fields[i].value;
        if(tokens[i]==='cc-number' && /^[0-9]+(?:[ -][0-9]+)*$/.test(actual) && actual.replace(/[ -]/g,'')===values[i])expected[i]=actual;
        else if(tokens[i]==='cc-exp' && /^[0-9]{2} *\/ *[0-9]{2}$/.test(actual) && actual.replace(/ /g,'')===values[i])expected[i]=actual;
-       else if(actual!==values[i])return {written,valid:false};
-     }return {written,valid:valid() && fields.every((e,i)=>e.value===expected[i])};},
+       else if(actual!==values[i])return refuse(actual===initial[i]?'unchanged':tokens[i]==='cc-exp'?'expiry_format':'write_mismatch',i);
+     }
+     if(!valid())return refuse('invalidated');
+     index=fields.findIndex((e,i)=>e.value!==expected[i]);
+     if(index>=0)return refuse('field_changed',index);
+     return {written,valid:true};},
    close(){changed=true;observer.disconnect();}};
 })()"""
+
+
+class WriteRefused(ValueError):
+    """Fixed writer diagnostics, sanitized again at the public result boundary."""
+
+    CATEGORIES = frozenset({
+        "initial_mismatch", "source_missing", "field_changed", "invalidated",
+        "select_mismatch", "unchanged", "expiry_format", "write_mismatch", "already_used",
+    })
+    TOKENS = frozenset({
+        "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-name",
+        "billing country", "billing address-line1", "billing address-line2",
+        "billing address-level2", "billing address-level1", "billing postal-code", "billing tel",
+    })
+
+    def __init__(self, result):
+        self.category = result.get("reason") if isinstance(result.get("reason"), str) and result["reason"] in self.CATEGORIES else "write_failed"
+        self.field = result.get("field") if isinstance(result.get("field"), str) and result["field"] in self.TOKENS else None
+        count = result.get("written")
+        self.written = count if type(count) is int and 0 <= count <= len(self.TOKENS) else None
+        super().__init__("write_unknown")
 
 
 class BindingRefused(ValueError):
@@ -343,14 +380,21 @@ class Target:
                 },
             ),
         )
-        self.check()
+        try:
+            self.check()
+        except Exception:
+            # Keep an actual writer refusal even when it invalidates its own
+            # retained document. Never turn a failed postflight into success.
+            raise WriteRefused(
+                result if isinstance(result, dict) and result.get("valid") is False else {}
+            ) from None
         if (
             not isinstance(result, dict)
             or result.get("valid") is not True
             or not isinstance(result.get("written"), int)
             or result["written"] < 2
         ):
-            raise ValueError("write_unknown")
+            raise WriteRefused(result if isinstance(result, dict) else {})
         return {"success": True, "status": "filled", "filled_fields": result["written"]}
 
     def close(self):

@@ -1,5 +1,7 @@
 # Hermes Secure Entry
 
+**0.5.2 diagnostics-only update:** fixed, value-free writer refusal categories now reach the native tool result; supplied name/postal mismatch policy remains unchanged pending actual measurement. [Diagnostics, tests and limits](docs/payment-writer-052.md).
+
 **0.5.1 candidate — two payment routes:** approved temporary Link cards remain available unchanged. A new **real-card** route privately saves a native site-bound payment item, fills the explicitly consented merchant/payment-iframe pair through the same retained native browser writer, and offers explicit handle-based cleanup with verified absence. Choose it for user-selected real cards, hotel guarantees or deferred charges where temporary cards are unsuitable. Native payment storage encrypts **CVC too**; the entry page discloses persistence. No automatic deletion, purchase, reservation, live activation or live hotel verification is claimed. See [workflow, native APIs, CVC limitation, tests and installation](docs/real-card-payment.md).
 
 Prefer core `browser_vault(action=fill, handle=...)` for supported current-document native card forms. The retained plugin writer is needed for the explicit cross-origin iframe case that core's document-only inspection cannot reach. [0.5.1 reproduction, native-handler comparison and validation](docs/payment-widget-051.md).

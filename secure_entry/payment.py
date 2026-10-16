@@ -15,10 +15,10 @@ import time
 from pathlib import Path
 from .native import owner, validate_origin
 from .payment_file import PrivateCard, PrivateFileRefused
-from .payment_browser import BindingRefused, Target
+from .payment_browser import BindingRefused, Target, WriteRefused
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.5.1"
+PAYMENT_DIAGNOSTIC_VERSION = "0.5.2"
 
 
 class RetrievalRefused(ValueError):
@@ -274,6 +274,15 @@ class LocalPayment:
                     diagnostic["subprocess_exit_status"] = exc.exit_status
             elif isinstance(exc, BindingRefused):
                 diagnostic = {"refusal": exc.category}
+            elif stage == "write":
+                diagnostic = {"refusal": "write_failed"}
+                if isinstance(exc, WriteRefused):
+                    safe = WriteRefused({"reason": exc.category, "field": exc.field, "written": exc.written})
+                    diagnostic["refusal"] = safe.category
+                    if safe.field is not None:
+                        diagnostic["field"] = safe.field
+                    if safe.written is not None:
+                        diagnostic["written_fields"] = safe.written
             elif stage == "private_file":
                 diagnostic = {
                     "refusal": exc.category
