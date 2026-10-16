@@ -98,6 +98,78 @@ class CardTests(unittest.TestCase):
         self.assertEqual(deleted['status'], 'deleted')
         self.assertIsNone(self.store.get_meta(handle))
 
+    def test_saved_card_preserves_prefilled_billing_absent_from_native_contract(self):
+        from test_payment_browser import PaymentBrowserTests
+        from tools import approval
+        handle = self.save_card()
+        fixture = PaymentBrowserTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        frame = fixture.page.frames[1]
+        frame.evaluate('''() => {document.body.innerHTML=`<div>
+          <input autocomplete="cc-number" required>
+          <input autocomplete="cc-exp" required placeholder="MM/YY">
+          <input autocomplete="cc-name" value="SYNTHETIC CARDHOLDER" required>
+          <select autocomplete="billing country" required><option value="USA">United States</option></select>
+          <input autocomplete="billing address-line1" value="1 Test St" required>
+          <input autocomplete="billing address-line2">
+          <input autocomplete="billing address-level2" value="Test City" required>
+          <select autocomplete="billing address-level1" required><option value="NewYork">New York</option></select>
+          <input autocomplete="billing postal-code" value="10001" required>
+          <input autocomplete="billing tel" value="2125550100" required></div>`;}''')
+        before = frame.locator('input,select').evaluate_all('(es)=>es.map(e=>e.value)')
+        prompts = []
+        def notify(data):
+            prompts.append(data)
+            approval.resolve_gateway_approval('synthetic-key', 'once', request_id=data['request_id'])
+        approval.register_gateway_notify('synthetic-key', notify)
+        self.addCleanup(approval.unregister_gateway_notify, 'synthetic-key')
+        result = json.loads(self.service.card_fill({'handle':handle, 'parent':fixture.parent,
+            'frame':fixture.frame, 'merchant_origin':'https://merchant.test',
+            'frame_origin':'https://provider.test'}, task_id='synthetic-payment'))
+        self.assertTrue(result['success'], result)
+        self.assertEqual(result['filled_fields'], 2)
+        from agent.redact import redact_registered_vault_values
+        self.assertEqual(redact_registered_vault_values('True'), 'True', 'policy metadata is not a secret')
+        self.assertEqual(len(prompts), 1)
+        after = frame.locator('input,select').evaluate_all('(es)=>es.map(e=>e.value)')
+        self.assertEqual(after[2:], before[2:])
+        self.assertEqual(after[:2], ['4242424242424242', '12/35'])
+        self.assertTrue(frame.locator('input,select').evaluate_all('(es)=>es.every(e=>e.checkValidity())'))
+        self.assertIsNotNone(self.store.get_meta(handle))
+
+    def test_core_native_fill_cannot_reach_cross_origin_widget(self):
+        from test_payment_browser import PaymentBrowserTests
+        from tools import approval, browser_vault_tool
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        handle = self.save_card()
+        fixture = PaymentBrowserTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.page.evaluate('''() => {
+          for(const name of ['cardnumber','depDate']) {
+            const e=document.createElement('input');e.type='hidden';e.name=name;document.body.append(e);
+          }
+        }''')
+        prompts = []
+        def notify(data):
+            prompts.append(data)
+            approval.resolve_gateway_approval('synthetic-key', 'once', request_id=data['request_id'])
+        approval.register_gateway_notify('synthetic-key', notify)
+        self.addCleanup(approval.unregister_gateway_notify, 'synthetic-key')
+        # Replace backend discovery only, never native consent, inspection,
+        # supervisor evaluation, tab selection, or classifier/fill planning.
+        backend = SimpleNamespace(needs_unlock=False, get_meta=self.store.get_meta,
+            resolve_secret=self.store.resolve_secret, name='synthetic-native')
+        with patch('agent.vault_backends.backend_for_handle', return_value=backend), \
+             patch.object(backend, 'resolve_secret', side_effect=AssertionError('must not resolve')):
+            result = json.loads(browser_vault_tool.browser_vault_fill(handle, task_id='synthetic-payment'))
+        self.assertEqual(len(prompts), 1)
+        self.assertFalse(result['success'], result)
+        self.assertEqual(result['error'], 'No payment form fields were found on the current page.')
+        self.assertEqual(fixture.page.frames[1].locator('[autocomplete=cc-number]').input_value(), '')
+
     def test_saved_card_refusal_fences_keep_secret_unresolved_and_browser_empty(self):
         from test_payment_browser import PaymentBrowserTests
         from tools import approval

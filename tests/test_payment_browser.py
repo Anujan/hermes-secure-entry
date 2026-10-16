@@ -181,7 +181,7 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
-                    payment_diagnostic_version="0.5.0",
+                    payment_diagnostic_version="0.5.1",
                 ),
             )
 
@@ -269,6 +269,46 @@ class PaymentBrowserTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             target.check()
+
+    def test_combined_expiry_input_mask_preserves_exact_month_and_year(self):
+        target = self.target_for_html(
+            '<div><input autocomplete="cc-number" required><input autocomplete="cc-exp" required></div>'
+        )
+        self.page.frames[1].evaluate('''() => {
+          window.expiryEvents=[];
+          const e=document.querySelector('[autocomplete=cc-exp]');
+          e.addEventListener('input',()=>{window.expiryEvents.push('input'); e.value=e.value.replace('/', ' / ')});
+          e.addEventListener('change',()=>window.expiryEvents.push('change'));
+        }''')
+        result = target.fill(dict(number="4242424242424242", exp_month=12, exp_year=2035))
+        self.assertEqual(result['filled_fields'], 2)
+        self.assertEqual(self.page.frames[1].locator('[autocomplete=cc-exp]').input_value(), '12 / 35')
+        self.assertEqual(self.page.frames[1].evaluate('window.expiryEvents'), ['input', 'change'])
+
+    def test_unsupplied_billing_preservation_does_not_bypass_required_or_identity(self):
+        for preserve, extra, billing in (
+            (True, '<input autocomplete="billing address-line1" required>', {}),
+            (True, '<input autocomplete="billing postal-code" value="99999">', {'postal_code':'10001'}),
+            (True, '<input autocomplete="cc-name" value="Other Person">', {'name':'Synthetic Person'}),
+            (False, '<input autocomplete="billing address-line1" value="1 Test St">', {}),
+        ):
+            with self.subTest(preserve=preserve, extra=extra):
+                target = self.target_for_html('<div><input autocomplete="cc-number"><input autocomplete="cc-exp">'+extra+'</div>')
+                with self.assertRaises(ValueError):
+                    target.fill(dict(number='4242424242424242', exp_month=12, exp_year=2035,
+                        billing_address=billing, preserve_unsupplied_billing=preserve))
+                self.assertEqual(self.page.frames[1].locator('[autocomplete=cc-number]').input_value(), '')
+                target.close()
+
+    def test_invalid_combined_expiry_mask_is_refused(self):
+        for value in ('11 / 35', '12 / 36', '12 / 35x', '1235', '12/2035'):
+            with self.subTest(value=value):
+                target = self.target_for_html('<div><input autocomplete="cc-number"><input autocomplete="cc-exp"><input autocomplete="cc-csc"></div>')
+                self.page.frames[1].evaluate('''value => document.querySelector('[autocomplete=cc-exp]').addEventListener('input',e=>e.target.value=value)''', value)
+                with self.assertRaises(ValueError):
+                    target.fill(dict(number='4242424242424242', exp_month=12, exp_year=2035, cvc='987'))
+                self.assertEqual(self.page.frames[1].locator('[autocomplete=cc-csc]').input_value(), '')
+                target.close()
 
     def test_combined_expiry_without_merchant_cvc(self):
         target = self.target_for_html(
@@ -473,7 +513,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 success=True,
                 status="filled",
                 filled_fields=4,
-                payment_diagnostic_version="0.5.0",
+                payment_diagnostic_version="0.5.1",
             ),
         )
         self.assertNotIn(
@@ -628,7 +668,8 @@ class PaymentBrowserTests(unittest.TestCase):
                         selected = bu.browser_exec(
                             "switch_tab("
                             + repr(self.parent)
-                            + ')\nprint(current_tab()["targetId"])',
+                            + ')\nprint("selected-exact-parent", current_tab()["targetId"] == '
+                            + repr(self.parent) + ')',
                             session=session,
                             task_id="synthetic-payment",
                             timeout_s=45,
@@ -636,7 +677,9 @@ class PaymentBrowserTests(unittest.TestCase):
                         if isinstance(selected, str):
                             selected = json.loads(selected)
                         self.assertTrue(selected.get("success"), selected)
-                        self.assertIn(self.parent, selected["output"])
+                        # Random target IDs can contain registered synthetic CVC
+                        # substrings. Compare inside the harness, before redaction.
+                        self.assertIn('selected-exact-parent True', selected["output"])
                         default = capture.call(
                             "Target.getTargetInfo", session_id=capture.page_session_id
                         )["result"]["targetInfo"]["targetId"]
@@ -765,7 +808,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 "success": True,
                 "status": "filled",
                 "filled_fields": 4,
-                "payment_diagnostic_version": "0.5.0",
+                "payment_diagnostic_version": "0.5.1",
             },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
@@ -853,7 +896,7 @@ class PaymentBrowserTests(unittest.TestCase):
             {
                 "success": False,
                 "status": "payment_declined",
-                "payment_diagnostic_version": "0.5.0",
+                "payment_diagnostic_version": "0.5.1",
             },
         )
         self.assertEqual(

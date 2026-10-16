@@ -26,7 +26,8 @@ class VaultCardSource:
         self._metadata(handle, merchant)
         secret = self.store.resolve_secret(handle)
         try:
-            return {'number':secret['card_number'], 'cvc':secret['cvc'],
+            return {'preserve_unsupplied_billing': True,
+                    'number':secret['card_number'], 'cvc':secret['cvc'],
                     'exp_month':int(secret['exp_month']), 'exp_year':int(secret['exp_year']),
                     'billing_address':{'name':secret.get('cardholder_name', ''),
                                        'postal_code':secret.get('billing_postal_code', '')}}

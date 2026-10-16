@@ -75,6 +75,11 @@ CHILD = r"""(() => {
    write(card){const values=tokens.map(t=>card[t]);
      // Phone is contact metadata, not Link's billing identity: preserve a prefilled
      // value privately. Never use guest profile fields in place of issued billing.
+     // Saved native cards do not contain full billing addresses. Preserve only
+     // unsupplied billing controls, including blank optional line2, in this mode.
+     // Supplied identity (name/postal) still must match; Link keeps issued billing.
+     values.forEach((v,i)=>{if(v===undefined && tokens[i].startsWith('billing ') &&
+       card.preserve_unsupplied_billing===true && fields[i].checkValidity())values[i]=initial[i];});
      values.forEach((v,i)=>{if(tokens[i]==='billing tel' && v===undefined)values[i]=initial[i] || undefined;});
      if(used || !valid() || values.some(v=>typeof v!=='string') || fields.some((e,i)=>
        e.value!==initial[i] || (initial[i] && initial[i]!==values[i]) ||
@@ -92,6 +97,7 @@ CHILD = r"""(() => {
        if(!valid())return {written,valid:false};
        const actual=fields[i].value;
        if(tokens[i]==='cc-number' && /^[0-9]+(?:[ -][0-9]+)*$/.test(actual) && actual.replace(/[ -]/g,'')===values[i])expected[i]=actual;
+       else if(tokens[i]==='cc-exp' && /^[0-9]{2} *\/ *[0-9]{2}$/.test(actual) && actual.replace(/ /g,'')===values[i])expected[i]=actual;
        else if(actual!==values[i])return {written,valid:false};
      }return {written,valid:valid() && fields.every((e,i)=>e.value===expected[i])};},
    close(){changed=true;observer.disconnect();}};
@@ -317,8 +323,10 @@ class Target:
             }.items()
             if key in billing
         }
-        if billing:
+        preserve_billing = card.get("preserve_unsupplied_billing") is True
+        if billing and (not preserve_billing or "line2" in billing):
             billing_values["billing address-line2"] = billing.get("line2", "")
+        billing_values["preserve_unsupplied_billing"] = preserve_billing
         self.started = True
         result = self.invoke(
             self.csid,

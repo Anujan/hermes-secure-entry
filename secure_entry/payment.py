@@ -18,7 +18,7 @@ from .payment_file import PrivateCard, PrivateFileRefused
 from .payment_browser import BindingRefused, Target
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.5.0"
+PAYMENT_DIAGNOSTIC_VERSION = "0.5.1"
 
 
 class RetrievalRefused(ValueError):
@@ -245,7 +245,8 @@ class LocalPayment:
                         *card.get("billing_address", {}).values(),
                         f"{card['exp_month']:02d}/{card['exp_year'] % 100:02d}",
                 ]:
-                    if isinstance(value, (str, int)) and str(value):
+                    # bool is an int subclass; adapter policy is not a secret.
+                    if type(value) in (str, int) and str(value):
                         register_vault_redaction_value(str(value))
                 # Cover common formatting if a subsequent browser read echoes
                 # a number with spaces/dashes, not just its original digits.
