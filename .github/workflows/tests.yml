@@ -24,9 +24,12 @@ jobs:
         shell: bash
         working-directory: hermes
         run: python -m pm.build_env --source . --out "$GITHUB_WORKSPACE/test-env" --group dev --group test
-      - name: Install optional bot SDKs in the isolated test environment only
+      - name: Install bot SDKs and browser-test dependency in the isolated environment only
         shell: bash
-        run: uv pip install --python "$GITHUB_WORKSPACE/test-env/Scripts/python.exe" aiohttp python-telegram-bot discord.py
+        run: uv pip install --python "$GITHUB_WORKSPACE/test-env/Scripts/python.exe" aiohttp python-telegram-bot discord.py playwright
+      - name: Provision Chrome for disposable captured-browser tests
+        shell: bash
+        run: '"$GITHUB_WORKSPACE/test-env/Scripts/python.exe" -m playwright install chrome'
       - name: Test synthetic HTTP and native encrypted vault
         shell: bash
         working-directory: plugin

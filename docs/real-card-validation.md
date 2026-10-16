@@ -53,6 +53,8 @@ Results:
 
 An initial nonisolated run inherited installed middleware from the active profile and failed OTP bridge status assertions. Untouched 0.4.6 baseline reproduced the same failure family. All assertions passed once `HERMES_HOME` was isolated; no production fence or test expectation was weakened to hide those failures. The baseline also had one timing-sensitive non-primary-tab test failure in a full run; isolated candidate full runs passed it. A canonical host `DeprecationWarning` about positional `re.split(maxsplit)` is pre-existing and not patched here; selected-workspace runs were clean.
 
+An initial published Windows CI run failed because the existing test environment did not install Playwright (`ModuleNotFoundError`), so browser tests could not import. The workflow now installs Playwright only into the isolated test environment and provisions Chrome explicitly; it does not skip browser tests or modify a live runtime. Final exact-head CI status is included in the publication report.
+
 ## Native requirements and limits
 
 See [real-card-payment.md](real-card-payment.md) for the exact public native APIs, CVC persistence contract and blocker for a CVC-less variant. Both routes require in-process native integrations, genuine human DM owner/session/profile, native explicit payment consent, `SUPERVISOR_REGISTRY.capture`/`CapturedCDP`, takeover lease, and the existing standard-autocomplete direct-iframe writer contract. Manifest stays bounded to Hermes `>=0.22.1,<0.22.2`.
