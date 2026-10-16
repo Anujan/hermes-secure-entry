@@ -11,11 +11,11 @@ import re
 import time
 from pathlib import Path
 from .native import owner, validate_origin
-from .payment_file import PrivateCard
+from .payment_file import PrivateCard, PrivateFileRefused
 from .payment_browser import BindingRefused, Target
 
 
-PAYMENT_DIAGNOSTIC_VERSION = "0.4.4"
+PAYMENT_DIAGNOSTIC_VERSION = "0.4.5"
 
 
 class RetrievalRefused(ValueError):
@@ -262,6 +262,14 @@ class LocalPayment:
                     diagnostic["subprocess_exit_status"] = exc.exit_status
             elif isinstance(exc, BindingRefused):
                 diagnostic = {"refusal": exc.category}
+            elif stage == "private_file":
+                diagnostic = {
+                    "refusal": exc.category
+                    if isinstance(exc, PrivateFileRefused)
+                    and isinstance(exc.category, str)
+                    and exc.category in PrivateFileRefused.CATEGORIES
+                    else "private_file_failed"
+                }
             elif stage == "link_retrieval_producer":
                 diagnostic = {"refusal": "producer_failed"}
             elif stage == "native_consent":

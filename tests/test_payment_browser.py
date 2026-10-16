@@ -181,7 +181,7 @@ class PaymentBrowserTests(unittest.TestCase):
                     status="refused",
                     stage="target_binding",
                     refusal=category,
-                    payment_diagnostic_version="0.4.4",
+                    payment_diagnostic_version="0.4.5",
                 ),
             )
 
@@ -473,7 +473,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 success=True,
                 status="filled",
                 filled_fields=4,
-                payment_diagnostic_version="0.4.4",
+                payment_diagnostic_version="0.4.5",
             ),
         )
         self.assertNotIn(
@@ -765,7 +765,7 @@ class PaymentBrowserTests(unittest.TestCase):
                 "success": True,
                 "status": "filled",
                 "filled_fields": 4,
-                "payment_diagnostic_version": "0.4.4",
+                "payment_diagnostic_version": "0.4.5",
             },
         )
         self.assertIn("https://merchant.test", prompts[0]["command"])
@@ -853,7 +853,7 @@ class PaymentBrowserTests(unittest.TestCase):
             {
                 "success": False,
                 "status": "payment_declined",
-                "payment_diagnostic_version": "0.4.4",
+                "payment_diagnostic_version": "0.4.5",
             },
         )
         self.assertEqual(

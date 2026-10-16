@@ -12,6 +12,24 @@ from urllib.parse import urlsplit
 from contextlib import contextmanager
 
 
+class PrivateFileRefused(ValueError):
+    """Only fixed categories cross the private-artifact boundary."""
+
+    CATEGORIES = frozenset({
+        "closed", "windows_api", "directory_open", "directory_info",
+        "directory_reparse", "windows_acl", "owner", "file_open", "file_info",
+        "filetype", "linkcount", "size", "read", "json", "object",
+        "request_match", "merchant_origin", "card_type", "card_number_type",
+        "card_number_format", "cvc_type_format", "expiry_type_range",
+        "billing_type", "billing_field_type", "billing_field_format",
+        "private_file_failed",
+    })
+
+    def __init__(self, category):
+        super().__init__("private_file_refused")
+        self.category = category if category in self.CATEGORIES else "private_file_failed"
+
+
 @contextmanager
 def _handle(handle):
     try:
@@ -47,18 +65,17 @@ def _check_acl(handle):
     )
     allowed = {sec.ConvertSidToStringSid(_identity()), "S-1-5-18"}
     acl = sd.GetSecurityDescriptorDacl()
-    if (
-        sec.ConvertSidToStringSid(sd.GetSecurityDescriptorOwner()) not in allowed
-        or acl is None
-    ):
-        raise ValueError("private_file_refused")
+    if sec.ConvertSidToStringSid(sd.GetSecurityDescriptorOwner()) not in allowed:
+        raise PrivateFileRefused("owner")
+    if acl is None:
+        raise PrivateFileRefused("windows_acl")
     for i in range(acl.GetAceCount()):
         header, mask, sid = acl.GetAce(i)
         if (
             header[0] != con.ACCESS_ALLOWED_ACE_TYPE
             or sec.ConvertSidToStringSid(sid) not in allowed
         ):
-            raise ValueError("private_file_refused")
+            raise PrivateFileRefused("windows_acl")
 
 
 class PrivateCard:
@@ -83,10 +100,12 @@ class PrivateCard:
         return self
 
     def consume(self, request_id, merchant_origin):
-        _, con, file, _, _ = _windows()
-        if self.closed:
-            raise ValueError("private_file_refused")
+        category = "windows_api"
         try:
+            _, con, file, _, _ = _windows()
+            if self.closed:
+                raise PrivateFileRefused("closed")
+            category = "directory_open"
             with _handle(
                 file.CreateFile(
                     str(self.directory),
@@ -98,12 +117,15 @@ class PrivateCard:
                     None,
                 )
             ) as directory:
+                category = "directory_info"
                 if (
                     file.GetFileInformationByHandle(directory)[0]
                     & con.FILE_ATTRIBUTE_REPARSE_POINT
                 ):
-                    raise ValueError("private_file_refused")
+                    raise PrivateFileRefused("directory_reparse")
+                category = "windows_acl"
                 _check_acl(directory)
+                category = "file_open"
                 with _handle(
                     file.CreateFile(
                         str(self.path),
@@ -116,7 +138,9 @@ class PrivateCard:
                         None,
                     )
                 ) as handle:
+                    category = "file_info"
                     info = file.GetFileInformationByHandle(handle)
+                    category = "windows_acl"
                     _check_acl(handle)
                     if (
                         info[0]
@@ -124,31 +148,42 @@ class PrivateCard:
                             con.FILE_ATTRIBUTE_REPARSE_POINT
                             | con.FILE_ATTRIBUTE_DIRECTORY
                         )
-                        or info[7] != 1
-                        or info[5]
-                        or info[6] > 16384
                     ):
-                        raise ValueError("private_file_refused")
+                        raise PrivateFileRefused("filetype")
+                    if info[7] != 1:
+                        raise PrivateFileRefused("linkcount")
+                    if info[5] or info[6] > 16384:
+                        raise PrivateFileRefused("size")
+                    category = "read"
                     _, raw = file.ReadFile(handle, 16385)
+                    category = "json"
                     data = json.loads(raw)
-                    if (
-                        data.get("spend_request_id") != request_id
-                        or _origin(data.get("merchant_url", "")) != merchant_origin
-                    ):
-                        raise ValueError("private_file_refused")
+                    if not isinstance(data, dict):
+                        raise PrivateFileRefused("object")
+                    if data.get("spend_request_id") != request_id:
+                        raise PrivateFileRefused("request_match")
+                    category = "merchant_origin"
+                    if _origin(data.get("merchant_url", "")) != merchant_origin:
+                        raise PrivateFileRefused("merchant_origin")
                     card = data.get("card", {})
+                    if not isinstance(card, dict):
+                        raise PrivateFileRefused("card_type")
+                    if not isinstance(card.get("number"), str):
+                        raise PrivateFileRefused("card_number_type")
+                    if not re.fullmatch(r"[0-9]{12,19}", card["number"]):
+                        raise PrivateFileRefused("card_number_format")
+                    if "cvc" in card and (
+                        not isinstance(card["cvc"], str)
+                        or not re.fullmatch(r"[0-9]{3,4}", card["cvc"])
+                    ):
+                        raise PrivateFileRefused("cvc_type_format")
                     if (
-                        not re.fullmatch(r"[0-9]{12,19}", str(card.get("number", "")))
-                        or (
-                            "cvc" in card
-                            and not re.fullmatch(r"[0-9]{3,4}", str(card["cvc"]))
-                        )
-                        or type(card.get("exp_month")) is not int
+                        type(card.get("exp_month")) is not int
                         or not 1 <= card["exp_month"] <= 12
                         or type(card.get("exp_year")) is not int
                         or not 2026 <= card["exp_year"] <= 2100
                     ):
-                        raise ValueError("private_file_refused")
+                        raise PrivateFileRefused("expiry_type_range")
                     result = {
                         k: card[k]
                         for k in ("number", "cvc", "exp_month", "exp_year")
@@ -156,13 +191,16 @@ class PrivateCard:
                     }
                     if "billing_address" in card:
                         billing = card["billing_address"]
-                        if not isinstance(billing, dict) or any(
-                            not isinstance(v, str)
-                            or len(v) > 256
+                        if not isinstance(billing, dict):
+                            raise PrivateFileRefused("billing_type")
+                        if any(not isinstance(v, str) for v in billing.values()):
+                            raise PrivateFileRefused("billing_field_type")
+                        if any(
+                            len(v) > 256
                             or any(ord(c) < 32 for c in v)
                             for v in billing.values()
                         ):
-                            raise ValueError("private_file_refused")
+                            raise PrivateFileRefused("billing_field_format")
                         result["billing_address"] = {
                             k: v
                             for k, v in billing.items()
@@ -178,8 +216,10 @@ class PrivateCard:
                             )
                         }
                     return result
+        except PrivateFileRefused:
+            raise
         except Exception:
-            raise ValueError("private_file_refused") from None
+            raise PrivateFileRefused(category) from None
 
     def __exit__(self, *exc):
         self.closed = True

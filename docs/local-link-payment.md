@@ -82,6 +82,28 @@ including disposable real Chrome OOPIF mutation/revert and native consent tests;
 targeted Ruff passed. No live browser, wallet, credential, install or core change
 was used for this repair.
 
+## Private-file diagnostics (0.4.5)
+
+Private-artifact refusals now return an allowlisted `refusal` category at
+`stage=private_file`: Windows API/open/info/ACL/owner failures, reparse/file type,
+link count, size/read/JSON/object shape, request/merchant binding, card shape,
+PAN type/format, CVC type/format, expiry type/range, and billing type/field
+validation. Unknown exceptions become `private_file_failed`. No values, paths,
+request identifiers, exception messages or producer output are returned.
+All existing filesystem and exact request/merchant fences remain in force.
+
+Contract audit: the official [SDK types](https://github.com/stripe/link-cli/blob/main/packages/sdk/src/types/index.ts)
+declare PAN/CVC as strings, expiry as numbers, billing as optional, and
+line2/city/state/postal_code as optional strings. Missing fields and empty
+strings already work. That source does **not** declare nullable billing fields;
+no null normalization is guessed in this diagnostic release. Unknown top-level
+and card metadata remain ignored. Numeric PAN/CVC are refused explicitly instead
+of accepting them via string coercion and failing later in the fill path.
+
+RED/GREEN covered malformed nested shapes and secret-bearing unexpected errors,
+then model-visible fixed diagnostics. Isolated full suite: **182 tests passed**
+in 111.262s. No wallet, live browser, installation or runtime configuration changed.
+
 ## Registered native facility
 
 `secure_entry_payment_fill(parent, frame, merchant_origin, frame_origin, spend_request_id)` accepts **metadata only**. The exact parent must exist on the native task supervisor's captured connection; the direct iframe must be owned by that parent. The authenticated same-profile supported DM, user/chat/session identity, native task and service lifecycle generation are checked. The existing public native capture pins the supervisor/WebSocket generation. No model-supplied endpoint, file path, script, selector, card or credential argument exists.

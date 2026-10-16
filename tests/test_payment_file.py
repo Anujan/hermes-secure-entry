@@ -19,6 +19,44 @@ CARD = {
 
 
 class PaymentFileTests(unittest.TestCase):
+    def test_refusal_categories_are_fixed_and_malformed_shapes_are_secret_free(self):
+        from unittest.mock import patch
+
+        cases = [
+            ([], "object"),
+            ({**CARD, "spend_request_id": "SYNTHETIC_PRIVATE"}, "request_match"),
+            ({**CARD, "merchant_url": ["SYNTHETIC_PRIVATE"]}, "merchant_origin"),
+            ({**CARD, "card": None}, "card_type"),
+        ]
+        for fields, category in (
+            ({"number": 4242424242424242}, "card_number_type"),
+            ({"number": "SYNTHETIC_PRIVATE"}, "card_number_format"),
+            ({"cvc": []}, "cvc_type_format"),
+            ({"exp_month": True}, "expiry_type_range"),
+            ({"exp_year": 1}, "expiry_type_range"),
+            ({"billing_address": []}, "billing_type"),
+            ({"billing_address": {"line2": None}}, "billing_field_type"),
+            ({"billing_address": {"line1": "x" * 257}}, "billing_field_format"),
+        ):
+            cases.append(({**CARD, "card": {**CARD["card"], **fields}}, category))
+        for data, category in cases:
+            with self.subTest(category=category), tempfile.TemporaryDirectory() as root:
+                with payment_file.PrivateCard(root) as inbox:
+                    inbox.path.write_text(json.dumps(data))
+                    with self.assertRaises(ValueError) as caught:
+                        inbox.consume("lsrq_synthetic", "https://merchant.invalid")
+                    self.assertEqual(str(caught.exception), "private_file_refused")
+                    self.assertEqual(getattr(caught.exception, "category", None), category)
+                    self.assertNotIn("SYNTHETIC_PRIVATE", repr(caught.exception))
+                    self.assertFalse(inbox.path.exists())
+        with tempfile.TemporaryDirectory() as root, payment_file.PrivateCard(root) as inbox:
+            inbox.path.write_text(json.dumps(CARD))
+            with patch.object(payment_file, "_check_acl", side_effect=OSError("SYNTHETIC_PRIVATE")):
+                with self.assertRaises(ValueError) as caught:
+                    inbox.consume("lsrq_synthetic", "https://merchant.invalid")
+            self.assertEqual(getattr(caught.exception, "category", None), "windows_acl")
+            self.assertNotIn("SYNTHETIC_PRIVATE", repr(caught.exception))
+
     def test_issued_billing_and_optional_cvc_preserved(self):
         data = json.loads(json.dumps(CARD))
         del data["card"]["cvc"]

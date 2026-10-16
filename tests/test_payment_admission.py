@@ -48,6 +48,8 @@ class PaymentAdmissionTests(unittest.TestCase):
         from secure_entry.payment import RetrievalRefused
 
         for failure, expected_stage, expected_reason in (
+            ("private", "private_file", "billing_field_type"),
+            ("unknown_private", "private_file", "private_file_failed"),
             ("producer", "link_retrieval_producer", "subprocess_exit"),
             ("unknown_producer", "link_retrieval_producer", "producer_failed"),
             ("current", "post_retrieval_current", "operation_cancelled"),
@@ -90,18 +92,28 @@ class PaymentAdmissionTests(unittest.TestCase):
                     patch("secure_entry.payment.Target", return_value=target),
                     patch("secure_entry.payment.PrivateCard") as inbox,
                 ):
+                    from secure_entry.payment_file import PrivateFileRefused
+                    if failure in {"private", "unknown_private"}:
+                        inbox.return_value.__enter__.return_value.consume.side_effect = (
+                            PrivateFileRefused("billing_field_type")
+                            if failure == "private"
+                            else RuntimeError("SYNTHETIC_PRIVATE")
+                        )
                     raw = self.facility.fill(self.args, task_id="synthetic-payment")
                 self.service.closed = False
                 result = json.loads(raw)
                 self.assertEqual(result.get("stage"), expected_stage)
                 self.assertEqual(result.get("refusal"), expected_reason)
-                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.4")
+                self.assertEqual(result.get("payment_diagnostic_version"), "0.4.5")
                 self.assertEqual(
                     result.get("subprocess_exit_status"),
                     7 if failure == "producer" else None,
                 )
                 self.assertNotIn("SYNTHETIC_PRIVATE", raw)
-                inbox.return_value.__enter__.return_value.consume.assert_not_called()
+                if failure in {"private", "unknown_private"}:
+                    inbox.return_value.__enter__.return_value.consume.assert_called_once()
+                else:
+                    inbox.return_value.__enter__.return_value.consume.assert_not_called()
 
     def test_consent_diagnostics_and_native_wait_accounting(self):
         from types import SimpleNamespace
